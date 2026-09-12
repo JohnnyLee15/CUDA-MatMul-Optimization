@@ -133,7 +133,7 @@ A memory instruction happens at the warp level and tells threads in a warp to lo
 
 1. Warp executes a memory instruction
 2. Each active thread/lane computes the address it needs
-3. Those per-thread memory requests are collected
+3. Those per thread memory requests are collected
 4. The memory subsystem examines the requested addresses.
 5. It generates the required memory transactions
 6. Those transactions service the warp’s requests
@@ -178,7 +178,7 @@ __global__ void read(const float* __restrict__ a, uint32_t n) {
 }
 ```
 
-The expression `a[i]` corresponds to a **single** memory load instruction issued for the warp. Each of the 8 active threads executes that same instruction and generates one 4-byte memory request:
+The expression `a[i]` corresponds to a **single** memory load instruction issued for the warp. Each of the 8 active threads executes that same instruction and generates one 4 byte memory request:
 
 ```text
 thread 0 → a[0]
@@ -233,7 +233,7 @@ We will examine the first warp of block `(0, 0)` at loop iteration `i = 0`. Deno
 
 First, consider the load from `a`: `a[y * k + i]`
 
-At this iteration, threads 0–15 have `y = 0`, so they all read `a[0]`. Threads 16–31 have `y = 1`, so they all read `a[256]`. These two values fall in different 32-byte segments:
+At this iteration, threads 0–15 have `y = 0`, so they all read `a[0]`. Threads 16–31 have `y = 1`, so they all read `a[256]`. These two values fall in different 32 byte segments:
 
 ```text
 Segment  0:     a[0] through a[7]  - threads 0-15 request a[0], but we fetch all 8 floats in the segment
@@ -256,7 +256,7 @@ Next, consider the load from `b`: `b[i * n + x]`
 | ⋮             | ⋮  | ⋮            |
 | `t_15, t_31` | 15 | `b[15]`      |
 
-The 32 threads read 16 different contiguous values from `b`, indices 0-15. These occupy two consecutive 32-byte segments:
+The 32 threads read 16 different contiguous values from `b`, indices 0-15. These occupy two consecutive 32 byte segments:
 
 ```text
 Segment 0:  b[0] through b[7]  - threads 0-7, and 16-23
@@ -284,7 +284,7 @@ Finally, after the loop finishes, consider the store to `c`: `c[y * n + x]`.
 | ⋮      | ⋮ | ⋮  | ⋮               |
 | `t_31` | 1 | 15 | `c[1039]`       |
 
-The 32 threads write to 32 different addresses of `c`. These occupy four 32-byte segments:
+The 32 threads write to 32 different addresses of `c`. These occupy four 32 byte segments:
 
 ```text
 Segment 0:         c[0] through c[7]  - threads 0-7
@@ -295,8 +295,10 @@ Segment 129: c[1032] through c[1039]  - threads 24-31
 
 The hardware combines the write requests from threads 0-7 into one memory transaction, threads 8-15 into another, threads 16-23 into another, and threads 24-31 into another. Thus, four memory transactions are needed to write the warp's results.
 
-Here, all four memory transactions are fully utilized because the warp writes to every float in each segment. The 32 distinct floats occupy 128 bytes, so four 32-byte transactions are the minimum needed to write them.
+Here, all four memory transactions are fully utilized because the warp writes to every float in each segment. The 32 distinct floats occupy 128 bytes, so four 32 byte transactions are the minimum needed to write them.
 
 Here is another example of perfect coalescing.
 
-Our naive kernel already coalesces its global-memory accesses. `b` reads and `c` writes fully utilize the accessed segments under the conditions analyzed above, while `a` reads combine repeated requests but use only a small portion of each segment per iteration.
+Our naive kernel already coalesces its global memory accesses. `b` reads and `c` writes fully utilize the accessed segments under the conditions analyzed above, while `a` reads combine repeated requests but use only a small portion of each segment per iteration.
+
+Next, we’ll explore shared memory tiling, where threads in a block cooperate to load tiles of a and b and reuse those values across multiple calculations, reducing repeated global memory loads.
