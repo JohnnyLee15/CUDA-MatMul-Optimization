@@ -6,14 +6,12 @@
 #include "benchmark.h"
 
 
-constexpr uint32_t LINE_SIZE = 60;
-
-
-void Benchmark::printSpeedUp(float oldTime, float newTime) {
-    std::printf("%.2fx speed up\n", oldTime / newTime);
+void Benchmark::printSpeedUp(float oldTime, float newTime, const char *speedUpOver) {
+    std::printf("%.2fx speed up over %s\n", oldTime / newTime, speedUpOver);
 }
 
 
-void Benchmark::printSep() {
-    std::cout << std::string(LINE_SIZE, '=') << std::endl << std::endl;
+void Benchmark::printSep(char sepChar, bool newline) {
+    std::cout << std::string(LINE_SIZE, sepChar) << std::endl;
+    if (newline) std::cout << std::endl;
 }

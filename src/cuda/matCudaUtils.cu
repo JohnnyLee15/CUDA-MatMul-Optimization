@@ -7,6 +7,7 @@
 #include "cuda/matCudaUtils.h"
 #include "validation.h"
 #include "matrix.h"
+#include "cudaCheck.h"
 
 
 constexpr uint32_t BLOCK_SIZE = 256;
@@ -24,7 +25,7 @@ __global__ void matCompareKernel(
 
     if (i >= n) return;
 
-    if (fabsf(a[i] - b[i]) > ABS_ERROR) {
+    if (fabsf(a[i] - b[i]) > ABS_TOL + REL_TOL * fabsf(b[i])) {
         atomicExch(mismatch, 1);
     }
 }
@@ -53,8 +54,8 @@ __global__ void matInitRandomKernel(
 bool matCompareLaunch(const Matrix &a, const Matrix &b) {
     uint32_t mismatch;
     uint32_t *d_mismatch;
-    cudaMalloc(&d_mismatch, sizeof(uint32_t));
-    cudaMemset(d_mismatch, 0, sizeof(uint32_t));
+    CUDA_CHECK(cudaMalloc(&d_mismatch, sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemset(d_mismatch, 0, sizeof(uint32_t)));
 
     float *aData = a.data();
     float *bData = b.data();
@@ -62,9 +63,10 @@ bool matCompareLaunch(const Matrix &a, const Matrix &b) {
 
     uint32_t numBlocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
     matCompareKernel<<<numBlocks, BLOCK_SIZE>>>(aData, bData, n, d_mismatch);
+    CUDA_CHECK(cudaGetLastError());
 
-    cudaMemcpy(&mismatch, d_mismatch, sizeof(uint32_t), cudaMemcpyDeviceToHost);
-    cudaFree(d_mismatch);
+    CUDA_CHECK(cudaMemcpy(&mismatch, d_mismatch, sizeof(uint32_t), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaFree(d_mismatch));
 
     return mismatch == 0;
 }
@@ -76,4 +78,5 @@ void matInitRandomLaunch(Matrix &a, float min, float max) {
 
     uint32_t numBlocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
     matInitRandomKernel<<<numBlocks, BLOCK_SIZE>>>(aData, n, min, max, RANDOM_SEED);
+    CUDA_CHECK(cudaGetLastError());
 }

@@ -10,6 +10,7 @@
 #include "validation.h"
 #include "cuda/matCudaUtils.h"
 #include "device.h"
+#include "cudaCheck.h"
 
 
 Matrix::Matrix(uint32_t numRows, uint32_t numCols, Device device) :
@@ -53,7 +54,10 @@ bool Matrix::operator==(const Matrix &other) const {
 
     if (device == Device::CPU) {
         for (uint32_t i = 0; i < size; i++) {
-            if (std::abs(other.buffer[i] - buffer[i]) > ABS_ERROR) return false;
+            if (
+                std::abs(other.buffer[i] - buffer[i]) >
+                ABS_TOL + REL_TOL * std::abs(other.buffer[i])
+            ) return false;
         }
 
         return true;
@@ -113,11 +117,11 @@ Matrix Matrix::to(Device toDevice) const {
     Matrix copy(numRows, numCols, toDevice);
 
     if (device == Device::CUDA && toDevice == Device::CUDA) {
-        cudaMemcpy(copy.buffer, buffer, size * sizeof(float), cudaMemcpyDeviceToDevice);
+        CUDA_CHECK(cudaMemcpy(copy.buffer, buffer, size * sizeof(float), cudaMemcpyDeviceToDevice));
     } else if (device == Device::CUDA && toDevice == Device::CPU) {
-        cudaMemcpy(copy.buffer, buffer, size * sizeof(float), cudaMemcpyDeviceToHost);
+        CUDA_CHECK(cudaMemcpy(copy.buffer, buffer, size * sizeof(float), cudaMemcpyDeviceToHost));
     } else if (device == Device::CPU && toDevice == Device::CUDA) {
-        cudaMemcpy(copy.buffer, buffer, size * sizeof(float), cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMemcpy(copy.buffer, buffer, size * sizeof(float), cudaMemcpyHostToDevice));
     } else if (device == Device::CPU && toDevice == Device::CPU) {
         std::memcpy(copy.buffer, buffer, size * sizeof(float));
     } else {
@@ -134,7 +138,7 @@ Matrix::~Matrix() {
             free(buffer);
             break;
         case Device::CUDA:
-            cudaFree(buffer);
+            CUDA_CHECK(cudaFree(buffer));
             break;
         default:
             std::abort();

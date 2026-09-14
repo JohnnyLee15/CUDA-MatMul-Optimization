@@ -4,6 +4,7 @@
 
 #include "matrix.h"
 #include "cuda/matMulCudaNaive.h"
+#include "cudaCheck.h"
 
 
 constexpr uint32_t BLOCK_Y = 16;
@@ -41,9 +42,10 @@ void matMulCudaNaiveLaunch(const Matrix &a, const Matrix &b, Matrix &c) {
 
     uint32_t gridY = (m + BLOCK_Y - 1) / BLOCK_Y;
     uint32_t gridX = (n + BLOCK_X - 1) / BLOCK_X;
-    dim3 gridDims(gridX, gridY);
+    dim3 gridDim(gridX, gridY);
 
-    dim3 blockDims(BLOCK_X, BLOCK_Y);
+    dim3 blockDim(BLOCK_X, BLOCK_Y);
 
-    matMulCudaNaiveKernel<<<gridDims, blockDims>>>(a.data(), b.data(), c.data(), m, n, k);
+    matMulCudaNaiveKernel<<<gridDim, blockDim>>>(a.data(), b.data(), c.data(), m, n, k);
+    CUDA_CHECK(cudaGetLastError());
 }

@@ -8,7 +8,10 @@ class Matrix;
 
 class Benchmark {
     private:
-        static constexpr float NO_COMPARISON = -1.0f;
+        static constexpr float NO_COMPARISON = 1.0f;
+        static constexpr uint32_t LINE_SIZE = 60;
+        static constexpr char SEP_CHAR = '=';
+        static constexpr char TITLE_UNDERLINE_CHAR = '-';
 
         template<typename F>
         static void warmup(
@@ -37,8 +40,8 @@ class Benchmark {
             uint32_t numRuns
         );
 
-        static void printSep();
-        static void printSpeedUp(float oldTime, float newTime);
+        static void printSep(char sepChar, bool newline=false);
+        static void printSpeedUp(float oldTime, float newTime, const char *speedUpOver);
 
     public:
         Benchmark() = delete;
@@ -53,7 +56,8 @@ class Benchmark {
             uint32_t numRuns,
             uint32_t numWarmups,
             const char *testName,
-            float compareTime = NO_COMPARISON
+            float compareTime = NO_COMPARISON,
+            const char *speedUpOver = nullptr
         );
 };
 
