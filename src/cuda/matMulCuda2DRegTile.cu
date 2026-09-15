@@ -9,12 +9,15 @@
 
 constexpr uint32_t BLOCK_X = 16;
 constexpr uint32_t BLOCK_Y = 16;
+constexpr uint32_t NUM_THREADS = BLOCK_Y * BLOCK_X;
 constexpr uint32_t ROWS_PER_THREAD = 4;
 constexpr uint32_t COLS_PER_THREAD = 4;
 
 constexpr uint32_t TILE_M = BLOCK_Y * ROWS_PER_THREAD;
 constexpr uint32_t TILE_N = BLOCK_X * COLS_PER_THREAD;
 constexpr uint32_t TILE_K = 16;
+constexpr uint32_t A_TILE_ROW_STRIDE = NUM_THREADS / TILE_K;
+constexpr uint32_t B_TILE_ROW_STRIDE = NUM_THREADS / TILE_N;
 
 
 namespace {
@@ -31,6 +34,13 @@ __global__ void matMulCuda2DRegTileKernel(
 
     uint32_t ty = threadIdx.y;
     uint32_t tx = threadIdx.x;
+    uint32_t tid = ty * BLOCK_X + tx;
+
+    uint32_t aTileYStart = tid / TILE_K;
+    uint32_t aTileX = tid % TILE_K;
+
+    uint32_t bTileYStart = tid / TILE_N;
+    uint32_t bTileX = tid % TILE_N;
 
     uint32_t cyStart = blockIdx.y * TILE_M + ty * ROWS_PER_THREAD;
     uint32_t cxStart = blockIdx.x * TILE_N + tx * COLS_PER_THREAD;
@@ -41,25 +51,22 @@ __global__ void matMulCuda2DRegTileKernel(
 
     for (uint32_t tileStart = 0; tileStart < k; tileStart += TILE_K) {
 
-        if (tx < TILE_K) {
-            uint32_t aTileYStart = ty * ROWS_PER_THREAD;
-            uint32_t ax = tileStart + tx;
-
-            for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
-                uint32_t aTileY = aTileYStart + i;
-                uint32_t ay = cyStart + i;
-                aTile[aTileY][tx] = (ay < m && ax < k) ? a[ay * k +  ax] : 0.0f;
-            }
+        uint32_t ayBlockStart = blockIdx.y * TILE_M;
+        #pragma unroll
+        for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_M; tileRowOffset += A_TILE_ROW_STRIDE) {
+            uint32_t aTileY = tileRowOffset + aTileYStart;
+            uint32_t ay = ayBlockStart + aTileY;
+            uint32_t ax = tileStart + aTileX;
+            aTile[aTileY][aTileX] = (ay < m && ax < k) ? a[ay * k + ax] : 0.0f;
         }
 
-        if (ty < TILE_K) {
-            uint32_t by = tileStart + ty;
-            uint32_t bColBlockStart = blockIdx.x * TILE_N;
-
-            for (uint32_t bTileX = tx; bTileX < TILE_N; bTileX += BLOCK_X) {
-                uint32_t bx = bColBlockStart + bTileX;
-                bTile[ty][bTileX] = (by < k && bx < n) ? b[by * n + bx] : 0.0f;
-            }
+        uint32_t bxBlockStart = blockIdx.x * TILE_N;
+        #pragma unroll
+        for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_K; tileRowOffset += B_TILE_ROW_STRIDE) {
+            uint32_t bTileY = tileRowOffset + bTileYStart;
+            uint32_t by = tileStart + bTileY;
+            uint32_t bx = bxBlockStart + bTileX;
+            bTile[bTileY][bTileX] = (by < k && bx < n) ? b[by * n + bx] : 0.0f;
         }
 
         __syncthreads();
