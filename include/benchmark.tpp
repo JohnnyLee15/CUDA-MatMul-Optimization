@@ -84,7 +84,7 @@ float Benchmark::benchmarkMatMul(
     const char *speedUpOver
 ) {
     if (numRuns == 0) {
-        std::printf("Invalid benchmark runs=%u\n", numRuns);
+        std::fprintf(stderr, "Invalid benchmark runs=%u\n", numRuns);
         std::abort();
     }
 

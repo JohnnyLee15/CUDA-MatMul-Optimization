@@ -6,6 +6,8 @@
 #include "cuda/matMulCudaSharedMem.h"
 #include "cuda/matMulCuda1DRegTile.h"
 #include "cuda/matMulCuda2DRegTile.h"
+#include "cuda/matMulCudaVectorizedGeneral.h"
+#include "cuda/matMulCudaVectorizedExactFit.h"
 #include "matrix.h"
 #include "device.h"
 #include "benchmark.h"
@@ -89,5 +91,17 @@ int main() {
         aGpu, bGpu, cGpu, gtGpu,
         matMulCuda2DRegTileLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
         "GPU 2D Register Tile", gpu1DRegTileTime, "GPU 1D Register Tile"
+    );
+
+    float gpuVectorizedGeneralTime = Benchmark::benchmarkMatMul(
+        aGpu, bGpu, cGpu, gtGpu,
+        matMulCudaVectorizedGeneralLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
+        "GPU Vectorized General", gpu2DRegTileTime, "GPU 2D Register Tile"
+    );
+
+    float gpuVectorizedExactFitTime = Benchmark::benchmarkMatMul(
+        aGpu, bGpu, cGpu, gtGpu,
+        matMulCudaVectorizedExactFitLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
+        "GPU Vectorized ExactFit", gpu2DRegTileTime, "GPU 2D Register Tile"
     );
 }

@@ -84,7 +84,7 @@ Both launch 640 threads, but the first arrangement spreads the same useful work 
 
 Warps matter for memory performance because requests from threads executing the same global memory instruction can be served by the same transaction when they fall within the same memory segment. We’ll explore this in the coalescing section.
 
-For example, a `16 × 16` block contains 256 threads, forming 8 `(256 / 32 = 8)` warps. Its first warp contains:
+For example, a `16 x 16` block contains 256 threads, forming 8 `(256 / 32 = 8)` warps. Its first warp contains:
 
 ```text
 Threads  0–15: (0, 0), (1, 0), ... (15, 0)
@@ -224,7 +224,7 @@ The input matrices are `a` and `b`, and the output matrix is `c`. Their dimensio
 - `b`: `k` rows and `n` columns
 - `c`: `m` rows and `n` columns
 
-Assume `k = 256`, `n = 1024`, with `16 × 16` = `256` threads per block. Also assume the arrays begin at addresses aligned to 32 bytes and all threads in the warp we examine are within the matrix bounds.
+Assume `k = 256`, `n = 1024`, with `16 x 16` = `256` threads per block. Also assume the arrays begin at addresses aligned to 32 bytes and all threads in the warp we examine are within the matrix bounds.
 
 Each thread is assigned to calculate one element of `c` specifically at index `c[y * n + x] == c[y][x]`.
 
@@ -267,7 +267,7 @@ Segment 1: b[8] through b[15]  - threads 8-15, and 24-31
 
 The hardware combines the requests from threads 0-7, and 16-23 into one memory transaction and those from threads 8-15, and 24-31 into another. Thus, two memory transactions are needed to load the values requested by the warp.
 
-Here, both memory transactions are fully utilized because every float in each segment is used by the warp. The 16 distinct floats occupy 64 bytes, so two 32-byte transactions are the minimum needed to load them.
+Here, both memory transactions are fully utilized because every float in each segment is used by the warp. The 16 distinct floats occupy 64 bytes, so two 32 byte transactions are the minimum needed to load them.
 
 Here is an example of perfect coalescing.
 
@@ -394,8 +394,8 @@ However, we do not need to load those entire rows and columns into shared memory
 
 For each chunk, the block cooperatively loads:
 
-- a `16 × 16` tile from `a`, containing 16 output rows and the next 16 columns along the `k` dimension
-- a `16 × 16` tile from `b`, containing 16 output columns and the corresponding 16 rows along the `k` dimension
+- a `16 x 16` tile from `a`, containing 16 output rows and the next 16 columns along the `k` dimension
+- a `16 x 16` tile from `b`, containing 16 output columns and the corresponding 16 rows along the `k` dimension
 
 After these tiles are loaded into shared memory, each thread performs a partial dot product using the 16 values it needs from the two shared memory tiles. Once every thread in the block has finished using the current tiles, the block advances along the `k` dimension. It then loads the next 16 columns from `a` and the next 16 rows from `b` into shared memory, and each thread performs another partial dot product.
 
@@ -481,7 +481,7 @@ The idea behind 1D register tiling is to assign each thread multiple output elem
 
 In our case, each thread computes multiple rows within the same output column. Neighboring threads are still assigned neighboring output columns, which preserves the coalesced write pattern to the output matrix. At the same time, each thread can reuse the same value that was loaded into a register across several calculations.
 
-At first, assigning more outputs to each thread appears to reduce parallelism. However, each thread can keep multiple partial sums in registers and reuse the same shared memory value across several multiply accumulate operations. This increases the arithmetic work performed per byte read from shared memory. A thread loads a value needed by several of its output calculations once into a register, then reuses it across those calculations. As a result, the kernel performs fewer shared memory reads relative to the amount of computation being performed.
+At first, assigning more outputs to each thread appears to reduce parallelism. However, each thread can keep multiple partial sums in registers and reuse the same shared memory value across several multiply accumulate operations. This increases the arithmetic intensity with respect to shared memory, meaning that more arithmetic is performed for each byte read from shared memory. To be explicit, a thread loads a value from shared memory into a register that is needed by several of its output calculations, then reuses the element that occupies a register across those calculations. As a result, the kernel performs fewer shared memory reads relative to the amount of computation being performed.
 
 As long as enough warps remain active to keep the GPU busy, the reduction in thread level parallelism can be outweighed by the increased data reuse and lower memory access overhead.
 
@@ -597,7 +597,7 @@ So during each iteration along the `k` dimension, the block loads:
 
 Now we will go through the kernel step by step.
 
-First, we create the two shared-memory tiles:
+First, we create the two shared memory tiles:
 
 ```cuda
 __shared__ float aTile[TILE_M][TILE_K];
@@ -697,7 +697,7 @@ for (uint32_t r = 0; r < ROWS_PER_THREAD; r++) {
 }
 ```
 
-Thus, each thread loads eight elements from `a` into one column of `aTile`, and together the threads in the block cooperatively fill the complete `128 × 16` shared-memory tile.
+Thus, each thread loads eight elements from `a` into one column of `aTile`, and together the threads in the block cooperatively fill the complete `128 x 16` shared memory tile.
 
 The block then loads the `16 x 16` tile of `b` exactly as in the previous shared memory kernel:
 
@@ -724,7 +724,7 @@ for (uint32_t i = 0; i < TILE_K; ++i) {
 }
 ```
 
-This is where the main 1D register-tiling optimization occurs. For each value of `i`, the thread loads one value from `bTile`:
+This is where the main 1D register tiling optimization occurs. For each value of `i`, the thread loads one value from `bTile`:
 
 ```cuda
 float bVal = bTile[i][tx];
@@ -742,7 +742,7 @@ aTile[row 7][i] * bVal → acc[7]
 
 Instead of loading the same value from `bTile` separately for eight different output calculations, the thread loads it once into `bVal` and reuses it across eight multiply-accumulate operations. This is the main source of additional reuse compared with the previous shared memory kernel. The accumulator array is intended to remain in registers throughout the computation. Unrolling the small loop helps the compiler access each accumulator using a constant index, although actual register placement depends on the compiled kernel.
 
-Once all threads have finished using the current shared-memory tiles, the second `__syncthreads()` ensures that no thread begins overwriting those tiles with the next `k` chunk until every thread has finished using them. The process then repeats for the next `TILE_K = 16` section of the dot products.
+Once all threads have finished using the current shared memory tiles, the second `__syncthreads()` ensures that no thread begins overwriting those tiles with the next `k` chunk until every thread has finished using them. The process then repeats for the next `TILE_K = 16` section of the dot products.
 
 After the block has traversed the complete `k` dimension, each thread has eight completed output values stored in its accumulator array. Finally, the thread writes those eight values to `c`:
 
@@ -778,3 +778,462 @@ thread tx = 2 → c[cy][2]
 Therefore, the global memory writes remain coalesced even though each thread now computes multiple output elements.
 
 Next, we extend register tiling to two dimensions, assigning each thread multiple output rows and columns so it can reuse values from both `aTile` and `bTile` across several calculations.
+
+## Matrix Optimization 4: 2D Register Tiling
+
+The idea behind 2D register tiling directly builds off the previous optimization. In the 1D register tiled kernel, each thread calculated multiple output elements down a single column of the output matrix. We now extend this idea so that each thread calculates a small 2D patch of output elements instead. This allows us to further increase the arithmetic intensity with respect to shared memory.
+
+You might be wondering what the difference is between 2D register tiling and simply extending the length of the 1D tile. As we will see in the 2D register tiled kernel, each thread loads multiple values from both shared memory tiles into registers and then uses the values that occupy the registers to compute a small patch of partial dot products. This reduces the total number of values needed from shared memory for the same number of multiply-accumulate operations. For example, at each position along `k`, a 16 element 1D tile needs 16 values from the left input matrix and one from the right input matrix. A `4 x 4` tile needs only four values from each input matrix. Both perform 16 multiply-accumulate operations, but the 2D tile needs eight input values instead of seventeen. In other words, we increase the arithmetic intensity with respect to shared memory even further by creating reuse in both dimensions rather than only one.
+
+For example, in a 1D register tile, one value loaded from one input matrix may be reused across several output rows, while the corresponding value from the other input matrix contributes to only one output within that thread’s 1D tile. In a 2D register tile, multiple values from both input matrices are loaded into registers and reused across a small 2D output patch. This allows a small number of shared memory reads to produce many multiply-accumulate operations.
+
+That is essentially the main difference between the 1D and 2D register tiled kernels. The 2D kernel increases data reuse from both input matrices and therefore further reduces the amount of shared memory traffic relative to the amount of computation being performed.
+
+At first, assigning more output elements to each thread may seem like it reduces parallelism because fewer threads are needed to compute the same output tile. However, the GPU only has a fixed amount of hardware available to execute threads at any given time. In practice, a matrix multiplication launches far more threads and thread blocks than can execute simultaneously, so there is usually already enough parallel work available to keep the SMs occupied.
+
+Once the available execution resources are fully utilized, creating even more fine grained thread level parallelism does not necessarily make the kernel faster. At that point, memory access and data movement can become the limiting factor. By giving each thread more work and reusing values already loaded into registers, 2D register tiling reduces the amount of memory traffic required for the same amount of computation.
+
+So even though each thread performs more work, the GPU can still have many warps and thread blocks active across its SMs. As long as there are enough resident warps to keep the SMs occupied, the important optimization becomes making each active thread more efficient with the data it already has. This allows the execution units to spend more time performing arithmetic and less time waiting for data from shared or global memory.
+
+Below is the 2D register tiled kernel:
+
+```cuda
+constexpr uint32_t BLOCK_X = 16;
+constexpr uint32_t BLOCK_Y = 16;
+constexpr uint32_t NUM_THREADS = BLOCK_Y * BLOCK_X;
+constexpr uint32_t ROWS_PER_THREAD = 4;
+constexpr uint32_t COLS_PER_THREAD = 4;
+
+constexpr uint32_t TILE_M = BLOCK_Y * ROWS_PER_THREAD;
+constexpr uint32_t TILE_N = BLOCK_X * COLS_PER_THREAD;
+constexpr uint32_t TILE_K = 32;
+constexpr uint32_t A_TILE_ROW_STRIDE = NUM_THREADS / TILE_K;
+constexpr uint32_t B_TILE_ROW_STRIDE = NUM_THREADS / TILE_N;
+
+
+__global__ void matMulCuda2DRegTileKernel (
+    const float* __restrict__ a,
+    const float* __restrict__ b,
+    float* __restrict__ c,
+    uint32_t m,
+    uint32_t n,
+    uint32_t k
+) {
+    __shared__ float aTile[TILE_M][TILE_K];
+    __shared__ float bTile[TILE_K][TILE_N];
+
+    const uint32_t ty = threadIdx.y;
+    const uint32_t tx = threadIdx.x;
+    const uint32_t tid = ty * BLOCK_X + tx;
+
+    const uint32_t aTileYStart = tid / TILE_K;
+    const uint32_t bTileYStart = tid / TILE_N;
+
+    const uint32_t aTileX = tid % TILE_K;
+    const uint32_t bTileX = tid % TILE_N;
+
+    const uint32_t ayBlockStart = blockIdx.y * TILE_M;
+    const uint32_t bxBlockStart = blockIdx.x * TILE_N;
+
+    const uint32_t bx = bxBlockStart + bTileX;
+
+    const uint32_t cyStart = ayBlockStart + ty * ROWS_PER_THREAD;
+    const uint32_t cxStart = bxBlockStart + tx * COLS_PER_THREAD;
+
+    float aReg[ROWS_PER_THREAD];
+    float bReg[COLS_PER_THREAD];
+    float acc[ROWS_PER_THREAD][COLS_PER_THREAD] = {0.0f};
+
+    for (uint32_t tileStart = 0; tileStart < k; tileStart += TILE_K) {
+
+        #pragma unroll
+        for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_M; tileRowOffset += A_TILE_ROW_STRIDE) {
+            uint32_t aTileY = tileRowOffset + aTileYStart;
+            uint32_t ay = ayBlockStart + aTileY;
+            uint32_t ax = tileStart + aTileX;
+            aTile[aTileY][aTileX] = (ay < m && ax < k) ? a[ay * k + ax] : 0.0f;
+        }
+
+        #pragma unroll
+        for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_K; tileRowOffset += B_TILE_ROW_STRIDE) {
+            uint32_t bTileY = tileRowOffset + bTileYStart;
+            uint32_t by = tileStart + bTileY;
+            bTile[bTileY][bTileX] = (by < k && bx < n) ? b[by * n + bx] : 0.0f;
+        }
+
+        __syncthreads();
+
+        #pragma unroll
+        for (uint32_t dotIdx = 0; dotIdx < TILE_K; dotIdx++) {
+
+            #pragma unroll
+            for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
+                aReg[i] = aTile[ty * ROWS_PER_THREAD + i][dotIdx];
+            }
+
+            #pragma unroll
+            for (uint32_t j = 0; j < COLS_PER_THREAD; j++) {
+                bReg[j] = bTile[dotIdx][tx * COLS_PER_THREAD + j];
+            }
+
+            #pragma unroll
+            for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
+                #pragma unroll
+                for (uint32_t j = 0; j < COLS_PER_THREAD; j++) {
+                    acc[i][j] += aReg[i] * bReg[j];
+                }
+            }
+        }
+
+        __syncthreads();
+    }
+
+    #pragma unroll
+    for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
+        uint32_t cy = cyStart + i;
+
+        #pragma unroll
+        for (uint32_t j = 0; j < COLS_PER_THREAD; j++) {
+            uint32_t cx = cxStart + j;
+
+            if (cy < m && cx < n) {
+                c[cy * n + cx] = acc[i][j];
+            }
+        }
+    }
+}
+```
+
+This kernel may look quite a bit more intimidating than the 1D register tiled kernel, but the underlying idea is essentially the same. The main differences are that each thread now computes a 2D patch of output elements instead of a 1D column of outputs, and the shared memory loading strategy has been generalized so that loading the tiles is independent of the output elements assigned to each thread. Let's go through the kernel step by step.
+
+First, we create the shared memory tiles `aTile` and `bTile`:
+
+```cuda
+__shared__ float aTile[TILE_M][TILE_K];
+__shared__ float bTile[TILE_K][TILE_N];
+```
+
+The shape of `aTile` is still determined by the number of output rows computed by the block and the number of elements processed along the `k` dimension during each tile iteration. Therefore `aTile` has dimensions `(BLOCK_Y * ROWS_PER_THREAD) x TILE_K = (16 * 4 ) x 32 = 64 x 32`. The main difference from the 1D register tiled kernel is the shape of `bTile`. In the 1D register tiled kernel, the block computed only `BLOCK_X` output columns, so `bTile` only needed `BLOCK_X` columns. In the 2D register tiled kernel, every thread now computes `COLS_PER_THREAD = 4` output columns. Since there are `BLOCK_X = 16` thread columns in the block, the block as a whole computes `TILE_N = BLOCK_X * COLS_PER_THREAD = 16 * 4 = 64` output columns. Therefore, the block requires 64 columns from `b` during each `k`-tile iteration, giving the dimensions of `bTile` to be `TILE_K x TILE_N = 32 x 64`. So each thread block now computes a `64 x 64` tile of the output matrix.
+
+Next, we get the thread's 2D coordinates within the block and also calculate a flattened thread index `tid`:
+
+```cuda
+const uint32_t ty = threadIdx.y;
+const uint32_t tx = threadIdx.x;
+const uint32_t tid = ty * BLOCK_X + tx;
+```
+
+Since the block contains `BLOCK_Y * BLOCK_X = 16 * 16 = 256` threads, `tid` ranges from 0 to 255. The flattened thread index allows us to treat all 256 threads in the block as a single group when cooperatively loading the shared memory tiles. This is useful because the dimensions of `aTile` and `bTile` no longer directly match the dimensions of the thread block.
+
+Next, we calculate the starting tile row and tile column assigned to each thread when loading `aTile` and `bTile`:
+
+```cuda
+const uint32_t aTileYStart = tid / TILE_K;
+const uint32_t aTileX = tid % TILE_K;
+
+const uint32_t bTileYStart = tid / TILE_N;
+const uint32_t bTileX = tid % TILE_N;
+```
+
+These calculations convert the flattened thread index back into a row and column coordinate for each shared memory tile. Since `aTile` contains `TILE_K` columns, dividing by `TILE_K` gives the starting row and taking the remainder gives the column:
+
+```text
+aTile row    = tid / TILE_K
+aTile column = tid % TILE_K
+```
+
+Similarly, since `bTile` contains `TILE_N` columns:
+
+```text
+bTile row    = tid / TILE_N
+bTile column = tid % TILE_N
+```
+
+These values define the starting row and fixed column for the thread’s cooperative tile loads. The column remains fixed for that thread, while the row is advanced by a fixed stride to load the remaining elements assigned to it.
+
+Next, we calculate the starting row of matrix `a` and the starting column of matrix `b` corresponding to the current thread block:
+
+```cuda
+const uint32_t ayBlockStart = blockIdx.y * TILE_M;
+const uint32_t bxBlockStart = blockIdx.x * TILE_N;
+```
+
+`ayBlockStart` gives the first row of matrix `a` needed to compute the output rows handled by the current thread block. Since the block computes `TILE_M` output rows, multiplying `blockIdx.y` by `TILE_M` moves us to the corresponding starting row in `a`.
+
+Similarly, `bxBlockStart` gives the first column of matrix `b` needed to compute the output columns handled by the current thread block. Since the block computes `TILE_N` output columns, multiplying `blockIdx.x` by `TILE_N` moves us to the corresponding starting column in `b`.
+
+These values depend only on the block coordinates, so they remain constant for the entire lifetime of the block and can be calculated once before entering the k-tile loop.
+
+Next, we calculate `bx`, which gives the global column of matrix `b` that this thread is responsible for loading:
+
+```cuda
+const uint32_t bx = bxBlockStart + bTileX;
+```
+
+`bx` can be calculated once before entering the `k`-tile loop because it depends only on `bxBlockStart` and `bTileX`, both of which remain constant for the lifetime of the thread. Unlike `by`, `bx` does not depend on `tileStart`, so its value does not change as we move through different `TILE_K` chunks.
+
+Next, we calculate the starting output row and column of the output patch that this thread will compute:
+
+```cuda
+const uint32_t cyStart = ayBlockStart + ty * ROWS_PER_THREAD;
+const uint32_t cxStart = bxBlockStart + tx * COLS_PER_THREAD;
+```
+
+The row calculation is the same idea as in the 1D register tiled kernel. `ayBlockStart = blockIdx.y * TILE_M` is an index with respect to the output matrix, so it moves us to the first output row covered by the current thread block. From there, `ty * ROWS_PER_THREAD` moves to the first output row assigned to the current thread row within that block.
+
+The column calculation follows the same pattern. `bxBlockStart = blockIdx.x * TILE_N` moves to the first output column covered by the current thread block, while `tx * COLS_PER_THREAD` moves to the first output column assigned to the current thread column within that block. Therefore, each thread begins at `(cyStart, cxStart)` and computes a `ROWS_PER_THREAD × COLS_PER_THREAD = 4 x 4` patch of the output matrix.
+
+Next, we declare the registers used during the partial dot product calculations:
+
+```cuda
+float aReg[ROWS_PER_THREAD];
+float bReg[COLS_PER_THREAD];
+float acc[ROWS_PER_THREAD][COLS_PER_THREAD] = {0.0f};
+```
+
+`aReg` stores the `ROWS_PER_THREAD = 4` values loaded from `aTile` for the current `dotIdx`, while `bReg` stores the `COLS_PER_THREAD = 4` values loaded from `bTile` for that same `dotIdx`. The 2D accumulator array `acc` stores the partial results for the thread's complete `4 x 4` output patch. Therefore, each thread maintains `4 x 4 = 16` partial output values throughout the traversal of the `k` dimension.
+
+Next, we enter the main `k`-tile loop, where the block loads the current tiles from `a` and `b` into shared memory and then computes the corresponding partial dot products. Before looking at the partial dot product calculations, it is useful to first examine how the shared memory tiles are now loaded, since this loading strategy is more general than the one used in the 1D register tiled kernel.
+
+```cuda
+for (uint32_t tileStart = 0; tileStart < k; tileStart += TILE_K)
+```
+
+In the 1D register tiled kernel, the shared memory loading pattern was directly tied to the thread coordinates used for the output computation. Although this produced coalesced global memory reads, it also meant that the loading strategy depended on the dimensions of the thread block and the output elements assigned to each thread. In the 2D register tiled kernel, we instead decouple shared memory loading from output computation. The flattened thread index `tid` is used to distribute the tile elements across all 256 threads independently of the output patch each thread computes. Another advantage of the new loading strategy is that the shared memory tile dimensions are no longer constrained by the individual dimensions of the thread block. In the previous loader, `tx` directly selected columns of `aTile` and `ty` directly selected rows of `bTile`, which meant `TILE_K` could not exceed the corresponding block dimensions without requiring a different loading scheme. By flattening the block into `tid`, we can instead use all `NUM_THREADS` threads cooperatively to cover the tiles. This allows us, for example, to use `TILE_K = 32` with a 16 x 16 thread block while still maintaining coalesced global memory accesses.
+
+Below is the code responsible for loading the tiles:
+
+```cuda
+#pragma unroll
+for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_M; tileRowOffset += A_TILE_ROW_STRIDE) {
+    uint32_t aTileY = tileRowOffset + aTileYStart;
+    uint32_t ay = ayBlockStart + aTileY;
+    uint32_t ax = tileStart + aTileX;
+    aTile[aTileY][aTileX] = (ay < m && ax < k) ? a[ay * k + ax] : 0.0f;
+}
+
+#pragma unroll
+for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_K; tileRowOffset += B_TILE_ROW_STRIDE) {
+    uint32_t bTileY = tileRowOffset + bTileYStart;
+    uint32_t by = tileStart + bTileY;
+    bTile[bTileY][bTileX] = (by < k && bx < n) ? b[by * n + bx] : 0.0f;
+}
+```
+
+We will explain the loading of `aTile` first, and then briefly look at `bTile`, since they use the same general loading strategy. First, we have the following loop:
+
+```cuda
+for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_M; tileRowOffset += A_TILE_ROW_STRIDE)
+```
+
+At first this may look slightly unintuitive. We could instead write:
+
+```cuda
+for (uint32_t aTileY = aTileYStart; aTileY < TILE_M; aTileY += A_TILE_ROW_STRIDE)
+```
+
+and this would express the exact same loading pattern. However, starting the loop at 0 makes the fixed iteration structure explicit. For example,
+
+```text
+tileRowOffset = 0; tileRowOffset < 64; tileRowOffset += 8
+```
+
+clearly executes eight times regardless of the thread. This works naturally with `#pragma unroll`, since the compiler sees loop bounds and an increment that are compile time constants. The alternative form can also potentially be unrolled, but the offset formulation makes the constant iteration pattern particularly clear.
+
+Next, recall these constants:
+
+```cuda
+constexpr uint32_t A_TILE_ROW_STRIDE = NUM_THREADS / TILE_K;
+constexpr uint32_t B_TILE_ROW_STRIDE = NUM_THREADS / TILE_N;
+```
+
+Since `aTile` contains `TILE_K` elements per row, `NUM_THREADS / TILE_K` tells us how many complete rows of `aTile` all threads in the block collectively cover during one loading pass. Likewise, because `bTile` contains `TILE_N` elements per row, `NUM_THREADS / TILE_N` tells us how many complete rows of `bTile` are covered during one loading pass.
+
+With the values used in this kernel:
+
+```text
+A_TILE_ROW_STRIDE = 256 / 32 = 8
+B_TILE_ROW_STRIDE = 256 / 64 = 4
+```
+
+Therefore, one pass of all 256 threads covers eight complete rows of `aTile` or four complete rows of `bTile`.
+
+We then use these values as row strides. Each thread keeps its tile column fixed while moving down by the row stride on each iteration. This moves the thread to the next set of rows that have not yet been covered by the block while preserving the contiguous access pattern between neighboring threads.
+
+Inside the `aTile` loading loop we calculate:
+
+```cuda
+uint32_t aTileY = tileRowOffset + aTileYStart;
+uint32_t ay = ayBlockStart + aTileY;
+uint32_t ax = tileStart + aTileX;
+```
+
+`aTileY` gives the row within `aTile` that the thread is currently loading. It is calculated by adding the current row offset to the thread's starting tile row.
+
+`ay` converts that shared memory row into the corresponding global row of matrix `a` by adding the block's starting row.
+
+`ax` gives the global column of matrix `a` for the current `TILE_K` iteration. `tileStart` gives the beginning of the current chunk along the `k` dimension, and `aTileX` gives the thread's fixed column within that chunk.
+
+Finally, we load the corresponding value from global memory into shared memory:
+
+```cuda
+aTile[aTileY][aTileX] = (ay < m && ax < k) ? a[ay * k + ax] : 0.0f;
+```
+
+The boundary check handles partial tiles at the edges of the matrices. If the global index lies outside the matrix, we write `0.0f` into shared memory instead.
+
+Let's go through an example with actual numbers. Suppose we are looking at block 0, so:
+
+```text
+blockIdx.y = 0
+blockIdx.x = 0
+```
+
+and:
+
+```text
+A_TILE_ROW_STRIDE = 256 / 32 = 8
+B_TILE_ROW_STRIDE = 256 / 64 = 4
+```
+
+For `aTile`, the thread assignments are:
+
+```text
+thread 0 writes to   aTile[0][0],  aTile[8][0],  ..., aTile[56][0]
+thread 1 writes to   aTile[0][1],  aTile[8][1],  ..., aTile[56][1]
+...
+thread 31 writes to  aTile[0][31], aTile[8][31], ..., aTile[56][31]
+thread 32 writes to  aTile[1][0],  aTile[9][0],  ..., aTile[57][0]
+thread 33 writes to  aTile[1][1],  aTile[9][1],  ..., aTile[57][1]
+...
+thread 255 writes to aTile[7][31], aTile[15][31], ..., aTile[63][31]
+```
+
+If we flatten the `64 x 32` tile into a one-dimensional array, the same pattern becomes:
+
+```text
+thread 0 writes to   aTile[0],   aTile[256], ..., aTile[1792]
+thread 1 writes to   aTile[1],   aTile[257], ..., aTile[1793]
+...
+thread 31 writes to  aTile[31],  aTile[287], ..., aTile[1823]
+thread 32 writes to  aTile[32],  aTile[288], ..., aTile[1824]
+thread 33 writes to  aTile[33],  aTile[289], ..., aTile[1825]
+...
+thread 255 writes to aTile[255], aTile[511], ..., aTile[2047]
+```
+
+Now the loading pattern becomes easier to see. Within each loading pass, neighboring threads access neighboring elements, giving us coalesced global memory reads. Between loading passes, each thread keeps its tile column fixed and moves down by `A_TILE_ROW_STRIDE` rows.
+
+In flattened memory, this means that each thread's next destination is exactly `NUM_THREADS = 256` elements after its previous destination. For example, thread 0 first writes flattened index `0`, while thread 255 writes index `255`. On the next pass, thread 0 writes index `256`, directly following the first set of 256 writes.
+
+The loading strategy for `bTile` is exactly the same. Since `bTile` has `TILE_N = 64` columns, all 256 threads cover four complete rows per loading pass:
+
+```text
+B_TILE_ROW_STRIDE = 256 / 64 = 4
+```
+
+The thread assignments are:
+
+```text
+thread 0 writes to   bTile[0][0],  bTile[4][0],  ..., bTile[28][0]
+thread 1 writes to   bTile[0][1],  bTile[4][1],  ..., bTile[28][1]
+...
+thread 63 writes to  bTile[0][63], bTile[4][63], ..., bTile[28][63]
+thread 64 writes to  bTile[1][0],  bTile[5][0],  ..., bTile[29][0]
+thread 65 writes to  bTile[1][1],  bTile[5][1],  ..., bTile[29][1]
+...
+thread 255 writes to bTile[3][63], bTile[7][63], ..., bTile[31][63]
+```
+
+Flattened, this becomes:
+
+```text
+thread 0 writes to  bTile[0],  bTile[256], ...,  bTile[1792]
+thread 1 writes to  bTile[1],  bTile[257], ...,  bTile[1793]
+...
+thread 63 writes to  bTile[63],  bTile[319], ...,  bTile[1855]
+thread 64 writes to  bTile[64],  bTile[320], ...,  bTile[1856]
+thread 65 writes to  bTile[65],  bTile[321], ...,  bTile[1857]
+...
+thread 255 writes to  bTile[255],  bTile[511], ...,  bTile[2047]
+```
+
+An interesting result is that even though `aTile` and `bTile` have different two dimensional shapes, their flattened loading patterns are identical. In both cases, thread `tid` writes to:
+
+```text
+tid
+tid + NUM_THREADS
+tid + 2 * NUM_THREADS
+...
+```
+
+The two dimensional coordinates differ because `aTile` and `bTile` have different row widths, but the flattened cooperative loading structure is the same.
+
+Now that the shared memory tiles have been loaded, we synchronize the block to ensure that every thread has finished its loads before any thread begins reading from the tiles:
+
+```cuda
+__syncthreads();
+```
+
+We then load values from the shared memory tiles into registers and use those register values to compute the partial dot products:
+
+```cuda
+#pragma unroll
+for (uint32_t dotIdx = 0; dotIdx < TILE_K; dotIdx++) {
+
+    #pragma unroll
+    for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
+        aReg[i] = aTile[ty * ROWS_PER_THREAD + i][dotIdx];
+    }
+
+    #pragma unroll
+    for (uint32_t j = 0; j < COLS_PER_THREAD; j++) {
+        bReg[j] = bTile[dotIdx][tx * COLS_PER_THREAD + j];
+    }
+
+    #pragma unroll
+    for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
+
+        #pragma unroll
+        for (uint32_t j = 0; j < COLS_PER_THREAD; j++) {
+            acc[i][j] += aReg[i] * bReg[j];
+        }
+    }
+}
+```
+
+For each `dotIdx`, the thread loads `ROWS_PER_THREAD = 4` values from `aTile` into `aReg` and `COLS_PER_THREAD = 4` values from `bTile` into `bReg`. The values in `aReg` correspond to the four output rows assigned to the thread, while the values in `bReg` correspond to the four output columns assigned to the thread. We then combine every value in `aReg` with every value in `bReg`, producing:
+
+```text
+4 x 4 = 16
+```
+
+multiply-accumulate operations for the current `dotIdx`.
+
+This is the key idea behind 2D register tiling. Instead of loading one value from shared memory and using it for only one output element, the values loaded into registers are reused across the thread's entire `4 x 4` output patch. Each value from `aReg` is reused across four output columns, while each value from `bReg` is reused across four output rows. After all `TILE_K = 32` positions have been processed, the thread has completed the partial dot products for the current pair of shared memory tiles. We then synchronize again:
+
+```cuda
+__syncthreads();
+```
+
+This second synchronization is needed before moving to the next `TILE_K` chunk. Without it, some threads could begin overwriting `aTile` and `bTile` with values from the next tile while other threads are still reading the current tile. The process then repeats for the next section of the `k` dimension until the complete dot products have been accumulated.
+
+Finally, after all `TILE_K` chunks have been processed, each thread writes its `ROWS_PER_THREAD x COLS_PER_THREAD` output patch from the `acc` registers back to matrix `c`:
+
+```cuda
+#pragma unroll
+for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
+    uint32_t cy = cyStart + i;
+
+    #pragma unroll
+    for (uint32_t j = 0; j < COLS_PER_THREAD; j++) {
+        uint32_t cx = cxStart + j;
+
+        if (cy < m && cx < n) {
+            c[cy * n + cx] = acc[i][j];
+        }
+    }
+}
+```
+
+`cyStart` and `cxStart` give the top left output coordinate assigned to the thread. The loops then walk across the thread's `4 x 4` output patch, and each accumulated value is written to its corresponding position in `c`. The boundary check ensures that threads belonging to blocks along the edges of the matrix do not write outside the valid output dimensions.
