@@ -11,12 +11,12 @@ constexpr uint32_t BLOCK_X = 16;
 constexpr uint32_t BLOCK_Y = 16;
 constexpr uint32_t NUM_THREADS = BLOCK_X * BLOCK_Y;
 
-constexpr uint32_t ROWS_PER_THREAD = 4;
-constexpr uint32_t COLS_PER_THREAD = 4;
+constexpr uint32_t ROWS_PER_THREAD = 8;
+constexpr uint32_t COLS_PER_THREAD = 8;
 
 constexpr uint32_t TILE_M = BLOCK_Y * ROWS_PER_THREAD;
 constexpr uint32_t TILE_N = BLOCK_X * COLS_PER_THREAD;
-constexpr uint32_t TILE_K = 16;
+constexpr uint32_t TILE_K = 32;
 
 constexpr uint32_t FLOATS_PER_FLOAT4 = 4;
 constexpr uint32_t FLOATS_PER_LOAD_PASS = NUM_THREADS * FLOATS_PER_FLOAT4;

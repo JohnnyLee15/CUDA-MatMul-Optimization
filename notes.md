@@ -1237,3 +1237,116 @@ for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
 ```
 
 `cyStart` and `cxStart` give the top left output coordinate assigned to the thread. The loops then walk across the thread's `4 x 4` output patch, and each accumulated value is written to its corresponding position in `c`. The boundary check ensures that threads belonging to blocks along the edges of the matrix do not write outside the valid output dimensions.
+
+With 2D register tiling established, the next optimization focuses on moving data with fewer instructions by combining four `float` values into one store/load operation. We do this by storing four floats in a single data type called `float4`.
+
+## Matrix Optimization 5: Vectorization
+
+Like the other optimizations thus far, vectorization is another incremental optimization. As mentioned in the previous paragraph, this involves combining four floats into a single data type called `float4`, which allows us to load and store four floats with a single instruction, as opposed to four separate instructions.
+
+At first, this may seem quite similar to coalescing, since the entire point of coalescing was to execute a memory instruction using as few memory transactions as possible. If you remember, memory is read and written in 32 byte segments. So in a way, it may seem like we already have something similar to `float8` vectorization, since a 32 byte memory transaction can move eight floats at once, and then eight threads use those eight floats to do whatever work they need to do.
+
+However, each thread still reads only one float per memory instruction. Vectorization allows each thread to read or write four contiguous floats with a single instruction. This is better explained with an example.
+
+Assume we have a single warp, which, remember, contains 32 threads. Suppose that warp needs to read 128 contiguous floats from the float array `a`. Since a `float` is 4 bytes, the warp is responsible for reading:
+
+```text
+128 * 4 = 512 bytes
+```
+
+First, let's look at this as if we were going to use a regular `float` data type for reading these 128 floats. Since each memory transaction delivers 32 bytes and we have 512 bytes total, the minimum number of memory transactions possible is:
+
+```text
+512 / 32 = 16
+```
+
+which gives us perfect coalescing.
+
+This can easily be done using the same general loading logic we used in the [2D register tiled kernel](#matrix-optimization-4-2d-register-tiling). We have 32 threads in our warp, so we increment `i` by 32 so that each iteration skips over the 32 reads already performed by the previous iteration.
+
+```cuda
+for (uint32_t i = tid; i < 128; i += 32) {
+    float b = a[i];
+    // calculations done...
+}
+```
+
+Here, `tid` means the thread ID with respect to the warp, so `tid = 0, 1, ... 31`.
+
+The access pattern looks like:
+
+```text
+Iteration 1:
+
+thread 0: a[0]
+thread 1: a[1]
+...
+thread 31: a[31]
+
+Iteration 2:
+
+thread 0: a[32]
+thread 1: a[33]
+...
+thread 31: a[63]
+
+...
+
+Iteration 4:
+
+thread 0: a[96]
+thread 1: a[97]
+...
+thread 31: a[127]
+```
+
+So, as we can see, it takes four iterations to complete the task. At each iteration, the warp issues one load instruction for `a[i]`. Therefore, we have four warp-level load instructions. We also have perfect coalescing, as adjacent threads access adjacent elements, so we still hit our target of 16 memory transactions. Therefore, this code results in:
+
+```text
+Warp instructions:    4
+Memory transactions: 16
+```
+
+Now let's use a `float4` loading strategy. The `float4` data type allows us to read or write four contiguous floats with one instruction. Since the floats are contiguous, each thread reads four contiguous floats from `a` per iteration. Because we have 32 threads, each reading four floats per iteration, the warp loads:
+
+```text
+4 * 32 = 128 floats
+```
+
+in a single iteration. This can be done using the following logic:
+
+```cuda
+for (uint32_t i = tid * 4; i < 128; i += 128) {
+    float4 b = *reinterpret_cast<const float4*>(&a[i]);
+    // calculations done...
+}
+```
+
+For this `float4` load to be valid, `&a[i]` must be aligned to a 16 byte boundary, and the four floats beginning at `a[i]` must all lie within the allocation. Fortunately, CUDA allocations are aligned to at least 256 bytes, so we usually do not need to worry about the starting address of the array. We only need to ensure that we do not break this alignment by starting a `float4` load at the wrong offset. Since each `float4` contains four floats, the starting index must be a multiple of four, and all four values must remain within the array. In this example, `i` is always a multiple of four, so the loads are correctly aligned.
+
+Again, `tid` means the thread ID with respect to the warp, so `tid = 0, 1, ... 31`.
+
+The access pattern looks like:
+
+```text
+Iteration 1:
+
+thread 0: a[0],   a[1],   a[2],   a[3]
+thread 1: a[4],   a[5],   a[6],   a[7]
+...
+thread 31: a[124], a[125], a[126], a[127]
+```
+
+So, as we can see, we only have one iteration and therefore only one load instruction for the warp.
+
+Again, we still have perfect coalescing because the threads within the warp read contiguous blocks of memory from `a`. `a[0]` through `a[7]` are covered by one 32 byte memory transaction and are used by threads 0 and 1. `a[8]` through `a[15]` are covered by another memory transaction and are used by threads 2 and 3. This pattern continues across the warp. Each 32 byte transaction contains eight floats, while each thread consumes four floats, so each transaction serves two adjacent threads. Therefore, we have `32 / 2 = 16 memory transactions`. Each thread now reads four floats using a single memory instruction. Therefore, this code results in:
+
+```text
+Warp instructions:    1
+Memory transactions: 16
+```
+
+So, as we can see, the number of memory transactions remains the same, but the scalar `float` version requires four times as many warp-level memory instructions as the `float4` version. Memory instructions can overlap with other work, but the GPU still needs to issue and execute all four instructions, which introduces additional instruction overhead.
+
+Therefore, using `float4` reads and writes can reduce the number of memory instructions the GPU needs to execute while preserving the same coalesced memory access pattern.
+
