@@ -1350,3 +1350,286 @@ So, as we can see, the number of memory transactions remains the same, but the s
 
 Therefore, using `float4` reads and writes can reduce the number of memory instructions the GPU needs to execute while preserving the same coalesced memory access pattern.
 
+Now we move into the actual kernel, which is shown below:
+
+```cuda
+constexpr uint32_t BLOCK_X = 16;
+constexpr uint32_t BLOCK_Y = 16;
+constexpr uint32_t NUM_THREADS = BLOCK_X * BLOCK_Y;
+
+constexpr uint32_t ROWS_PER_THREAD = 8;
+constexpr uint32_t COLS_PER_THREAD = 8;
+
+constexpr uint32_t TILE_M = BLOCK_Y * ROWS_PER_THREAD;
+constexpr uint32_t TILE_N = BLOCK_X * COLS_PER_THREAD;
+constexpr uint32_t TILE_K = 32;
+
+constexpr uint32_t FLOATS_PER_FLOAT4 = 4;
+constexpr uint32_t FLOATS_PER_LOAD_PASS = NUM_THREADS * FLOATS_PER_FLOAT4;
+
+constexpr uint32_t A_TILE_ROW_STRIDE = FLOATS_PER_LOAD_PASS / TILE_K;
+constexpr uint32_t B_TILE_ROW_STRIDE = FLOATS_PER_LOAD_PASS / TILE_N;
+
+constexpr uint32_t BYTES_PER_FLOAT4 = 16;
+
+
+__global__ void matMulCudaVectorizedExactFitKernel (
+    const float* __restrict__ a,
+    const float* __restrict__ b,
+    float* __restrict__ c,
+    uint32_t m,
+    uint32_t n,
+    uint32_t k
+) {
+    __shared__ __align__(BYTES_PER_FLOAT4) float aTile[TILE_K][TILE_M];
+    __shared__ __align__(BYTES_PER_FLOAT4) float bTile[TILE_K][TILE_N];
+
+    const uint32_t ty = threadIdx.y;
+    const uint32_t tx = threadIdx.x;
+    const uint32_t tid = ty * BLOCK_X + tx;
+    const uint32_t threadStartIdx = tid * FLOATS_PER_FLOAT4;
+
+    const uint32_t aTileYStart = threadStartIdx / TILE_K;
+    const uint32_t bTileYStart = threadStartIdx / TILE_N;
+
+    const uint32_t aTileX = threadStartIdx % TILE_K;
+    const uint32_t bTileX = threadStartIdx % TILE_N;
+
+    const uint32_t ayBlockStart = blockIdx.y * TILE_M;
+    const uint32_t bxBlockStart = blockIdx.x * TILE_N;
+
+    const uint32_t cyStart = ayBlockStart + ty * ROWS_PER_THREAD;
+    const uint32_t cxStart = bxBlockStart + tx * COLS_PER_THREAD;
+
+    __align__(BYTES_PER_FLOAT4) float aReg[ROWS_PER_THREAD];
+    __align__(BYTES_PER_FLOAT4) float bReg[COLS_PER_THREAD];
+    __align__(BYTES_PER_FLOAT4) float acc[ROWS_PER_THREAD][COLS_PER_THREAD] = {0.0f};
+
+    for (uint32_t tileStart = 0; tileStart < k; tileStart += TILE_K) {
+
+        #pragma unroll
+        for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_M; tileRowOffset += A_TILE_ROW_STRIDE) {
+            uint32_t aTileY = tileRowOffset + aTileYStart;
+            uint32_t ay = ayBlockStart + aTileY;
+            uint32_t ax = tileStart + aTileX;
+
+            const float4 toLoad = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
+            aTile[aTileX + 0][aTileY] = toLoad.x;
+            aTile[aTileX + 1][aTileY] = toLoad.y;
+            aTile[aTileX + 2][aTileY] = toLoad.z;
+            aTile[aTileX + 3][aTileY] = toLoad.w;
+        }
+
+        #pragma unroll
+        for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_K; tileRowOffset += B_TILE_ROW_STRIDE) {
+            uint32_t bTileY = tileRowOffset + bTileYStart;
+            uint32_t by = tileStart + bTileY;
+            uint32_t bx = bxBlockStart + bTileX;
+
+            *reinterpret_cast<float4*>(&bTile[bTileY][bTileX]) = *reinterpret_cast<const float4*>(&b[by * n + bx]);
+        }
+
+        __syncthreads();
+
+        #pragma unroll
+        for (uint32_t dotIdx = 0; dotIdx < TILE_K; dotIdx++) {
+
+            #pragma unroll
+            for (uint32_t i = 0; i < ROWS_PER_THREAD; i += FLOATS_PER_FLOAT4) {
+                *reinterpret_cast<float4*>(&aReg[i]) = *reinterpret_cast<float4*>(&aTile[dotIdx][ty* ROWS_PER_THREAD + i]);
+            }
+
+            #pragma unroll
+            for (uint32_t j = 0; j < COLS_PER_THREAD; j += FLOATS_PER_FLOAT4) {
+                *reinterpret_cast<float4*>(&bReg[j]) = *reinterpret_cast<float4*>(&bTile[dotIdx][tx * COLS_PER_THREAD + j]);
+            }
+
+            #pragma unroll
+            for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
+                #pragma unroll
+                for (uint32_t j = 0; j < COLS_PER_THREAD; j++) {
+                    acc[i][j] += aReg[i] * bReg[j];
+                }
+            }
+        }
+
+        __syncthreads();
+    }
+
+    #pragma unroll
+    for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
+        uint32_t cy = cyStart + i;
+
+        #pragma unroll
+        for (uint32_t j = 0; j < COLS_PER_THREAD; j += FLOATS_PER_FLOAT4) {
+            uint32_t cx = cxStart + j;
+            *reinterpret_cast<float4*>(&c[cy * n + cx]) = *reinterpret_cast<float4*>(&acc[i][j]);
+        }
+    }
+}
+```
+
+From here on out, I will stop going over the entire kernel line by line and only explain the parts that are new to this kernel.
+
+First are these constants:
+
+```cuda
+constexpr uint32_t FLOATS_PER_FLOAT4 = 4;
+constexpr uint32_t FLOATS_PER_LOAD_PASS = NUM_THREADS * FLOATS_PER_FLOAT4;
+
+constexpr uint32_t A_TILE_ROW_STRIDE = FLOATS_PER_LOAD_PASS / TILE_K;
+constexpr uint32_t B_TILE_ROW_STRIDE = FLOATS_PER_LOAD_PASS / TILE_N;
+
+constexpr uint32_t BYTES_PER_FLOAT4 = 16;
+```
+
+`FLOATS_PER_FLOAT4 = 4` is fairly obvious from the name: there are four float values inside a `float4`.
+
+Next, we have `FLOATS_PER_LOAD_PASS`. Remember from the earlier kernels that each thread block contains `BLOCK_X * BLOCK_Y = 16 * 16 = 256` threads. In the previous shared memory loading strategy, each thread loaded one `float` during a loading pass, so one pass of all 256 threads loaded 256 floats.
+
+Now each thread loads a `float4`, meaning each thread loads four floats instead of one. Therefore, one loading pass across all threads moves:
+`NUM_THREADS * FLOATS_PER_FLOAT4 = 256 * 4 = 1024 = FLOATS_PER_LOAD_PASS` floats.
+
+The row strides `A_TILE_ROW_STRIDE` and `B_TILE_ROW_STRIDE` use the same logic as in the 2D register tiled kernel. The difference is that the numerator is now `FLOATS_PER_LOAD_PASS` instead of `NUM_THREADS`, because each loading pass moves 1024 floats instead of 256.
+
+Finally:
+
+```cuda
+constexpr uint32_t BYTES_PER_FLOAT4 = 16;
+```
+
+is simply because each float is four bytes, and a `float4` contains four floats. Thus `4 floats * 4 bytes = 16 bytes`.
+
+The next new piece is `__align__(BYTES_PER_FLOAT4)` which means 16 byte alignment. For example:
+
+```cuda
+__shared__ __align__(BYTES_PER_FLOAT4) float bTile[TILE_K][TILE_N];
+```
+
+ensures that the address to the first float in `bTile` is aligned to 16 bytes. That means the address is 0 or divisible by 16.
+
+We want this because a `float4` access moves 16 bytes at once. The address used for a `float4` load or store therefore needs to be 16 byte aligned if we want to safely use that 16 byte access. In this kernel, the indices used for the `float4` accesses are also chosen in groups of four floats, so the addresses we use remain aligned to 16 byte boundaries.
+
+Remember, the point of doing this is to allow the GPU to move four floats with one memory instruction instead of issuing four separate scalar load or store instructions.
+
+The next new piece is:
+
+```cuda
+const uint32_t threadStartIdx = tid * FLOATS_PER_FLOAT4;
+```
+
+This serves a similar purpose to `tid` in the previous kernel, except now each thread is responsible for four contiguous floats during a loading pass instead of one. For example:
+
+```text
+thread 0 starts at float 0
+thread 1 starts at float 4
+thread 2 starts at float 8
+...
+```
+
+We multiply `tid` by `FLOATS_PER_FLOAT4` so that each thread skips over the four floats assigned to the previous thread. This value is then used to calculate the starting row and column of the shared memory tile that each thread loads:
+
+```cuda
+const uint32_t aTileYStart = threadStartIdx / TILE_K;
+const uint32_t bTileYStart = threadStartIdx / TILE_N;
+
+const uint32_t aTileX = threadStartIdx % TILE_K;
+const uint32_t bTileX = threadStartIdx % TILE_N;
+```
+
+The logic is the same as in the previous kernel, except that `threadStartIdx` now represents the first float of a four float group rather than the location of a single float.
+
+The next important change is the layout of `aTile`:
+
+```cuda
+__shared__ __align__(BYTES_PER_FLOAT4) float aTile[TILE_K][TILE_M];
+```
+
+Compared with the previous kernel, the dimensions of `aTile` have been transposed. Previously we stored it as:
+
+```cuda
+aTile[TILE_M][TILE_K]
+```
+
+This changes how we load values into the shared memory tile:
+
+```cuda
+#pragma unroll
+for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_M; tileRowOffset += A_TILE_ROW_STRIDE) {
+    uint32_t aTileY = tileRowOffset + aTileYStart;
+    uint32_t ay = ayBlockStart + aTileY;
+    uint32_t ax = tileStart + aTileX;
+
+    const float4 toLoad = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
+    aTile[aTileX + 0][aTileY] = toLoad.x;
+    aTile[aTileX + 1][aTileY] = toLoad.y;
+    aTile[aTileX + 2][aTileY] = toLoad.z;
+    aTile[aTileX + 3][aTileY] = toLoad.w;
+}
+```
+
+We load four contiguous floats from global memory using a single `float4` load:
+
+```cuda
+const float4 toLoad = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
+```
+
+However, those four values are written individually into the transposed shared memory tile:
+
+```cuda
+aTile[aTileX + 0][aTileY] = toLoad.x;
+aTile[aTileX + 1][aTileY] = toLoad.y;
+aTile[aTileX + 2][aTileY] = toLoad.z;
+aTile[aTileX + 3][aTileY] = toLoad.w;
+```
+
+At first, it may seem like directly writing the entire `float4` into shared memory would offer better kernel performance, because it requires fewer store instructions than writing the four values individually. For example, we could write the four values into `aTile` with a single `float4` store:
+
+```cuda
+*reinterpret_cast<float4*>(&aTile[aTileY][aTileX]) = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
+```
+
+This should indeed be faster. So why do we transpose `aTile` instead? The reason becomes clear when we look at how `aTile` is read during the partial dot product calculation:
+
+```cuda
+#pragma unroll
+for (uint32_t i = 0; i < ROWS_PER_THREAD; i += FLOATS_PER_FLOAT4) {
+    *reinterpret_cast<float4*>(&aReg[i]) = *reinterpret_cast<float4*>(&aTile[dotIdx][ty * ROWS_PER_THREAD + i]);
+}
+```
+
+In the previous 2D register tiled kernel, the values needed for `aReg` were taken from different rows of `aTile` at the same `dotIdx`:
+
+```cuda
+aReg[i] = aTile[ty * ROWS_PER_THREAD + i][dotIdx];
+```
+
+Those values are separated by the row stride of the original `aTile` layout, so they are not contiguous in memory. Because of that, we cannot load four of them with a single `float4` access. By transposing `aTile`, those same values now lie next to each other in memory:
+
+```cuda
+aTile[dotIdx][ty * ROWS_PER_THREAD + i]
+```
+
+so four values can be loaded from shared memory into `aReg` with one `float4` load.
+
+That is the entire reason for transposing `aTile`. We sacrifice the ability to write the loaded `float4` into shared memory as one contiguous `float4` store, but in return we make the values needed during the inner dot product loop contiguous, allowing us to vectorize the repeated shared memory reads.
+
+This tradeoff is not automatically faster. We are making the global-memory-to-shared-memory write for `aTile` **not** vectorized in order to make the shared-memory-to-register reads during the inner loop vectorized. In my benchmarks, the transposed `aTile` version was faster than the version that kept the original layout.
+
+The `bTile` side does not require this transpose because the values needed by each thread are already contiguous along the column dimension:
+
+```cuda
+*reinterpret_cast<float4*>(&bReg[j]) = *reinterpret_cast<float4*>(&bTile[dotIdx][tx * COLS_PER_THREAD + j]);
+```
+
+Therefore, `bTile` can use a direct `float4` store when loading from global memory.
+
+Finally, the output values are also written back to `c` four floats at a time:
+
+```cuda
+*reinterpret_cast<float4*>(&c[cy * n + cx]) = *reinterpret_cast<float4*>(&acc[i][j]);
+```
+
+Since the output columns assigned to each thread are contiguous, four accumulated results can be written with one `float4` store.
+
+That is essentially all of the new logic introduced by the vectorized kernel compared with the 2D register tiled kernel. The tiling strategy, register accumulation, and synchronization remain fundamentally the same. The main difference is that memory movement is now organized around groups of four contiguous floats so that we can reduce the number of load and store instructions executed by the GPU.
