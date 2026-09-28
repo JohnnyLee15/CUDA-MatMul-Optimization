@@ -2125,13 +2125,13 @@ First, we prove that $F$ is one-to-one. Assume that $F$ is not one-to-one. Then 
 
 Now,
 
-$$
+```math
 F(x_1,y_1)=F(x_2,y_2)
 \Leftrightarrow
 ((y_1+x_1-(x_1\bmod4))\bmod128, x_1)
 =
 ((y_2+x_2-(x_2\bmod4))\bmod128, x_2)
-$$
+```
 
 which gives,
 
@@ -2146,7 +2146,7 @@ $$
 
 Let $x$ denote the common value of $x_1$ and $x_2$. Then,
 
-$$
+```math
 (y_1+x_1-(x_1\bmod4))\bmod128
 =
 (y_2+x_2-(x_2\bmod4))\bmod128
@@ -2154,15 +2154,15 @@ $$
 (y_1+x-(x\bmod4))\bmod128
 =
 (y_2+x-(x\bmod4))\bmod128.
-$$
+```
 
 Let $c = x-(x\bmod4)$. Then,
 
-$$
+```math
 (y_1+c)\bmod128
 =
 (y_2+c)\bmod128.
-$$
+```
 
 Thus, when dividing $y_1+c$ and $y_2+c$ by 128, they produce the same remainder
 
@@ -2482,14 +2482,14 @@ $$
 
 Now, suppose $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4$. Then
 
-$$
+```math
 (G \circ F)(x,y) = G(F(x,y))
 =
 G
 \left(
     8\left\lfloor \dfrac{x}{8} \right\rfloor + ((x \bmod 8) + 4) \bmod 8,y
 \right)
-$$
+```
 
 Now, let $g=\left\lfloor\dfrac{x}{8}\right\rfloor \in \mathbb{Z}$ and $r=x\bmod8 \in \mathbb{Z}, 0 \leq r < 8$. By the Division Algorithm,
 
@@ -2517,25 +2517,25 @@ $$
 
 Therefore,
 
-$$
+```math
 \left\lfloor\dfrac{8g+s}{8}\right\rfloor\bmod8
 =
 g\bmod8
 \geq4.
-$$
+```
 
 And since, $((8g + s) \bmod8 + 4) \bmod 8 = (s + 4) \bmod 8$
 
 Therefore we have,
 
-$$
+```math
 G(8g+s,y)
 =
 \left(
 8g+((s+4)\bmod8),
 y
 \right).
-$$
+```
 
 Since
 
@@ -2545,7 +2545,7 @@ $$
 
 we get
 
-$$
+```math
 \left(
 8g+((s+4)\bmod8),
 y
@@ -2558,7 +2558,7 @@ y
 \right)\bmod8,
 y
 \right).
-$$
+```
 
 Using the property
 
@@ -2580,7 +2580,7 @@ since $0\leq r<8$.
 
 Therefore,
 
-$$
+```math
 \left(
 8g+
 \left(
@@ -2590,7 +2590,7 @@ y
 \right)
 =
 (8g+r,y).
-$$
+```
 
 Earlier we showed that
 
@@ -2607,25 +2607,25 @@ $$
 Now, we need to show that $\forall (u,v)\in P,\quad (F\circ G)(u,v)=(u,v)$. However, notice that $L=P$ and $F$ and $G$ are defined by the exact same function. Therefore, $F=G$.
 
 Thus,
-$$
+```math
 F\circ G
 =
 F\circ F
 =
 G\circ F.
-$$
+```
 
 We have already proved that $\forall (x,y)\in L$, $(G\circ F)(x,y)=(x,y)$.
 
 Since $L=P$, this result also holds for every $(u,v)\in P$. Therefore,
 
-$$
+```math
 (F\circ G)(u,v)
 =
 (G\circ F)(u,v)
 =
 (u,v).
-$$
+```
 
 Thus,
 
