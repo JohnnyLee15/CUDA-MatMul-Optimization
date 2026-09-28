@@ -94,7 +94,7 @@ __global__ void matMulCudaResolveBankConflictsExactFitKernel (
         for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_M; tileRowOffset += A_TILE_ROW_STRIDE) {
             const uint32_t aTileY = tileRowOffset + aTileYStart;
             const TileCoord aTileCoords = aTilePhysicalCoord(aTileX, aTileY);
-            const uint32_t ay = ayBlockStart + aTileY;;
+            const uint32_t ay = ayBlockStart + aTileY;
             const uint32_t ax = tileStart + aTileX;
 
             const float4 toLoad = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
