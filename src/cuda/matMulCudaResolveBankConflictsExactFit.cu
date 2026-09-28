@@ -1,10 +1,10 @@
 #include <cstdint>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 
 #include <cuda_runtime.h>
 
-#include "cuda/matMulCudaVectorizedExactFit.h"
+#include "cuda/matMulCudaResolveBankConflictsExactFit.h"
 #include "matrix.h"
 #include "cudaCheck.h"
 
@@ -28,9 +28,31 @@ constexpr uint32_t B_TILE_ROW_STRIDE = FLOATS_PER_LOAD_PASS / TILE_N;
 
 constexpr uint32_t BYTES_PER_FLOAT4 = 16;
 
+constexpr uint32_t FLOAT4_OFFSET_MASK = FLOATS_PER_FLOAT4 - 1u;
+constexpr uint32_t TILE_M_WRAP_MASK = TILE_M - 1u;
+constexpr uint32_t COLS_PER_THREAD_SHIFT = 3;
+
 
 namespace {
-__global__ void matMulCudaVectorizedExactFitKernel (
+struct TileCoord{
+    uint32_t x;
+    uint32_t y;
+};
+
+
+__device__ __forceinline__ TileCoord aTilePhysicalCoord(uint32_t logicalX, uint32_t logicalY) {
+    const uint32_t shift = logicalX & ~FLOAT4_OFFSET_MASK;
+    return TileCoord{(logicalY + shift) & TILE_M_WRAP_MASK, logicalX};
+}
+
+
+__device__ __forceinline__ TileCoord bTilePhysicalCoord(uint32_t logicalX, uint32_t logicalY) {
+    const uint32_t halfSwapMask = (logicalX >> COLS_PER_THREAD_SHIFT) & FLOATS_PER_FLOAT4;
+    return TileCoord{logicalX ^ halfSwapMask, logicalY};
+}
+
+
+__global__ void matMulCudaResolveBankConflictsExactFitKernel (
     const float* __restrict__ a,
     const float* __restrict__ b,
     float* __restrict__ c,
@@ -58,6 +80,10 @@ __global__ void matMulCudaVectorizedExactFitKernel (
     const uint32_t cyStart = ayBlockStart + ty * ROWS_PER_THREAD;
     const uint32_t cxStart = bxBlockStart + tx * COLS_PER_THREAD;
 
+    const uint32_t bTilePhysicalX = bTilePhysicalCoord(bTileX, 0).x;
+    const uint32_t bTileReadXJ0 = bTilePhysicalCoord(tx * COLS_PER_THREAD + 0, 0).x;
+    const uint32_t bTileReadXJ4 = bTilePhysicalCoord(tx * COLS_PER_THREAD + FLOATS_PER_FLOAT4, 0).x;
+
     __align__(BYTES_PER_FLOAT4) float aReg[ROWS_PER_THREAD];
     __align__(BYTES_PER_FLOAT4) float bReg[COLS_PER_THREAD];
     __align__(BYTES_PER_FLOAT4) float acc[ROWS_PER_THREAD][COLS_PER_THREAD] = {0.0f};
@@ -66,40 +92,40 @@ __global__ void matMulCudaVectorizedExactFitKernel (
 
         #pragma unroll
         for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_M; tileRowOffset += A_TILE_ROW_STRIDE) {
-            uint32_t aTileY = tileRowOffset + aTileYStart;
-            uint32_t ay = ayBlockStart + aTileY;
-            uint32_t ax = tileStart + aTileX;
+            const uint32_t aTileY = tileRowOffset + aTileYStart;
+            const TileCoord aTileCoords = aTilePhysicalCoord(aTileX, aTileY);
+            const uint32_t ay = ayBlockStart + aTileY;;
+            const uint32_t ax = tileStart + aTileX;
 
             const float4 toLoad = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
-            aTile[aTileX + 0][aTileY] = toLoad.x;
-            aTile[aTileX + 1][aTileY] = toLoad.y;
-            aTile[aTileX + 2][aTileY] = toLoad.z;
-            aTile[aTileX + 3][aTileY] = toLoad.w;
+            aTile[aTileCoords.y + 0][aTileCoords.x] = toLoad.x;
+            aTile[aTileCoords.y + 1][aTileCoords.x] = toLoad.y;
+            aTile[aTileCoords.y + 2][aTileCoords.x] = toLoad.z;
+            aTile[aTileCoords.y + 3][aTileCoords.x] = toLoad.w;
         }
 
         #pragma unroll
         for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_K; tileRowOffset += B_TILE_ROW_STRIDE) {
-            uint32_t bTileY = tileRowOffset + bTileYStart;
-            uint32_t by = tileStart + bTileY;
-            uint32_t bx = bxBlockStart + bTileX;
+            const uint32_t bTileY = tileRowOffset + bTileYStart;
+            const uint32_t by = tileStart + bTileY;
+            const uint32_t bx = bxBlockStart + bTileX;
 
-            *reinterpret_cast<float4*>(&bTile[bTileY][bTileX]) = *reinterpret_cast<const float4*>(&b[by * n + bx]);
+            *reinterpret_cast<float4*>(&bTile[bTileY][bTilePhysicalX]) = *reinterpret_cast<const float4*>(&b[by * n + bx]);
         }
 
         __syncthreads();
 
-        #pragma unroll
+        #pragma unroll 16
         for (uint32_t dotIdx = 0; dotIdx < TILE_K; dotIdx++) {
 
             #pragma unroll
             for (uint32_t i = 0; i < ROWS_PER_THREAD; i += FLOATS_PER_FLOAT4) {
-                *reinterpret_cast<float4*>(&aReg[i]) = *reinterpret_cast<float4*>(&aTile[dotIdx][ty* ROWS_PER_THREAD + i]);
+                const TileCoord aTileCoords = aTilePhysicalCoord(dotIdx, ty * ROWS_PER_THREAD + i);
+                *reinterpret_cast<float4*>(&aReg[i]) = *reinterpret_cast<float4*>(&aTile[aTileCoords.y][aTileCoords.x]);
             }
 
-            #pragma unroll
-            for (uint32_t j = 0; j < COLS_PER_THREAD; j += FLOATS_PER_FLOAT4) {
-                *reinterpret_cast<float4*>(&bReg[j]) = *reinterpret_cast<float4*>(&bTile[dotIdx][tx * COLS_PER_THREAD + j]);
-            }
+            *reinterpret_cast<float4*>(&bReg[0]) = *reinterpret_cast<float4*>(&bTile[dotIdx][bTileReadXJ0]);
+            *reinterpret_cast<float4*>(&bReg[4]) = *reinterpret_cast<float4*>(&bTile[dotIdx][bTileReadXJ4]);
 
             #pragma unroll
             for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
@@ -115,11 +141,11 @@ __global__ void matMulCudaVectorizedExactFitKernel (
 
     #pragma unroll
     for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
-        uint32_t cy = cyStart + i;
+        const uint32_t cy = cyStart + i;
 
         #pragma unroll
         for (uint32_t j = 0; j < COLS_PER_THREAD; j += FLOATS_PER_FLOAT4) {
-            uint32_t cx = cxStart + j;
+            const uint32_t cx = cxStart + j;
             *reinterpret_cast<float4*>(&c[cy * n + cx]) = *reinterpret_cast<float4*>(&acc[i][j]);
         }
     }
@@ -127,7 +153,7 @@ __global__ void matMulCudaVectorizedExactFitKernel (
 }
 
 
-void matMulCudaVectorizedExactFitLaunch(const Matrix &a, const Matrix &b, Matrix &c) {
+void matMulCudaResolveBankConflictsExactFitLaunch(const Matrix &a, const Matrix &b, Matrix &c) {
     uint32_t m = c.nrows();
     uint32_t n = c.ncols();
     uint32_t k = a.ncols();
@@ -143,7 +169,7 @@ void matMulCudaVectorizedExactFitLaunch(const Matrix &a, const Matrix &b, Matrix
 
     dim3 blockDim(BLOCK_X, BLOCK_Y);
 
-    matMulCudaVectorizedExactFitKernel<<<gridDim, blockDim>>>(a.data(), b.data(), c.data(), m, n, k);
+    matMulCudaResolveBankConflictsExactFitKernel<<<gridDim, blockDim>>>(a.data(), b.data(), c.data(), m, n, k);
     CUDA_CHECK(cudaGetLastError());
 }
 

@@ -8,6 +8,8 @@
 #include "cuda/matMulCuda2DRegTile.h"
 #include "cuda/matMulCudaVectorizedGeneral.h"
 #include "cuda/matMulCudaVectorizedExactFit.h"
+#include "cuda/matMulCudaResolveBankConflictsGeneral.h"
+#include "cuda/matMulCudaResolveBankConflictsExactFit.h"
 #include "matrix.h"
 #include "device.h"
 #include "benchmark.h"
@@ -110,6 +112,18 @@ int main() {
     float gpuVectorizedExactFitTime = Benchmark::benchmarkMatMul(
         aGpu, bGpu, cGpu, gtGpu,
         matMulCudaVectorizedExactFitLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
-        "GPU Vectorized ExactFit", gpu2DRegTileTime, "GPU 2D Register Tile"
+        "GPU Vectorized Exact Fit", gpu2DRegTileTime, "GPU 2D Register Tile"
+    );
+
+    float gpuResolveBankConflictsGeneralTime = Benchmark::benchmarkMatMul(
+        aGpu, bGpu, cGpu, gtGpu,
+        matMulCudaResolveBankConflictsGeneralLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
+        "GPU Resolve Bank Conflicts General", gpuVectorizedGeneralTime, "GPU Vectorized General"
+    );
+
+    float gpuResolveBankConflictsExactFitTime = Benchmark::benchmarkMatMul(
+        aGpu, bGpu, cGpu, gtGpu,
+        matMulCudaResolveBankConflictsExactFitLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
+        "GPU Resolve Bank Conflicts Exact Fit", gpuVectorizedExactFitTime, "GPU Vectorized Exact Fit"
     );
 }

@@ -129,16 +129,16 @@ Memory coalescing refers to the GPU combining memory requests from threads in a 
 
 Precisely speaking, coalescing happens for the active threads in **one** warp, executing **one** memory instruction, where the GPU groups memory requests from threads within the warp into as few memory transactions as possible. Requests from different warps are not combined into the same memory instruction and are therefore coalesced separately, even if adjacent threads from different neighbouring warps access adjacent global memory. Separate memory instructions, such as loading from `ptr *a` and `ptr *b`, are analyzed separately, to see if the warp's memory access is coalesced.
 
-A memory instruction happens at the warp level and tells threads in a warp to load or store data. A memory transaction is a logical memory system operation used to service an instruction given to a warp. One instruction can require multiple transactions, depending on the addresses requested by the threads. Thus, the sequence is.
+A memory instruction happens at the warp level and tells threads in a warp to load or store data. A memory transaction is a logical memory system operation used to serve an instruction given to a warp. One instruction can require multiple transactions, depending on the addresses requested by the threads. Thus, the sequence is.
 
 1. Warp executes a memory instruction
 2. Each active thread/lane computes the address it needs
 3. Those per thread memory requests are collected
 4. The memory subsystem examines the requested addresses.
 5. It generates the required memory transactions
-6. Those transactions service the warp’s requests
+6. Those transactions serve the warp’s requests
 
-For newer NVIDIA GPUs, a warp's global memory accesses are serviced using 32 byte aligned memory segments - aligned meaning each segment begins at an address that is a multiple of 32 bytes. For example:
+For newer NVIDIA GPUs, a warp's global memory accesses are served using 32 byte aligned memory segments - aligned meaning each segment begins at an address that is a multiple of 32 bytes. For example:
 
 ```text
 Segment 0: Bytes  0-31
@@ -187,9 +187,9 @@ thread 1 → a[1]
 thread 7 → a[7]
 ```
 
-Since `a[0]` through `a[7]` occupy exactly 32 contiguous bytes and `a[0]` begins on a 32 byte aligned address, all 8 requests fit within **one** 32 byte memory segment. Therefore, all 8 memory requests are serviced by **one** memory transaction. Thus, we have perfect coalescing.
+Since `a[0]` through `a[7]` occupy exactly 32 contiguous bytes and `a[0]` begins on a 32 byte aligned address, all 8 requests fit within **one** 32 byte memory segment. Therefore, all 8 memory requests are served by **one** memory transaction. Thus, we have perfect coalescing.
 
-Overall, memory coalescing reduces the number of memory transactions required to service a warp's memory instruction and can therefore improve kernel performance compared with a poorly coalesced access pattern.
+Overall, memory coalescing reduces the number of memory transactions required to serve a warp's memory instruction and can therefore improve kernel performance compared with a poorly coalesced access pattern.
 
 ### Naive Matrix Multiplication Kernel Review
 
@@ -1469,6 +1469,22 @@ __global__ void matMulCudaVectorizedExactFitKernel (
 }
 ```
 
+This is an exact-fit kernel, so it requires the matrix dimensions to be exactly divisible by the tile dimensions. Since
+
+$$
+TILE_M = 128,\qquad TILE_N = 128,\qquad TILE_K = 32,
+$$
+
+we require
+
+$$
+m \bmod 128 = 0,\qquad
+n \bmod 128 = 0,\qquad
+k \bmod 32 = 0.
+$$
+
+A general version of this kernel is also included in the repository for matrix dimensions that are not exact multiples of the tile dimensions.
+
 From here on out, I will stop going over the entire kernel line by line and only explain the parts that are new to this kernel.
 
 First are these constants:
@@ -1633,3 +1649,1165 @@ Finally, the output values are also written back to `c` four floats at a time:
 Since the output columns assigned to each thread are contiguous, four accumulated results can be written with one `float4` store.
 
 That is essentially all of the new logic introduced by the vectorized kernel compared with the 2D register tiled kernel. The tiling strategy, register accumulation, and synchronization remain fundamentally the same. The main difference is that memory movement is now organized around groups of four contiguous floats so that we can reduce the number of load and store instructions executed by the GPU.
+
+## Matrix Optimization 6: Resolving Bank Conflicts
+
+### Bank Conflicts
+
+Before diving into this optimization, we need to go over some new terminology. First, we need to know what a shared memory bank is. Shared memory is divided into 32 banks that can serve memory accesses in parallel. Each bank is 4 bytes wide, and consecutive 4 byte chunks of shared memory are distributed across the banks. After bank 31 (0-indexed), the mapping wraps back to bank 0, as shown below:
+
+```text
+float array index:  0  1  2  3  ... 30  31  32  33  34 ...
+bank:               0  1  2  3  ... 30  31   0   1   2 ...
+```
+
+The example above illustrates how each contiguous float is assigned to one of the 32 banks, and the banks wrap around from bank 31 to bank 0 every 128 bytes. Thus, an easy way to determine which bank a float index maps to is:
+
+```text
+bank = idx mod 32
+```
+
+Now that we know what a bank is and how to map an index to a bank, we need to explain what a bank conflict is. We know that many indices in an array map to the same bank. However, when each thread performs a 4 byte access, a bank can only serve one distinct 4 byte value at a time. This is best illustrated with an example. Consider the following instructions:
+
+```cuda
+uint32_t idx = tid * 32;
+uint32_t element = aShared[idx];
+```
+
+where `tid` represents the threads ID. CUDA executes instructions at the warp level, so for this example consider the first warp, where `tid = 0, 1, ..., 31`.
+
+```text
+thread 0:  idx = 0 * 32  =   0. Accesses bank   0 mod 32 = 0
+thread 1:  idx = 1 * 32  =  32. Accesses bank  32 mod 32 = 0
+...
+thread 31: idx = 31 * 32 = 992. Accesses bank 992 mod 32 = 0
+```
+
+As we can see, each thread in the warp accesses a different index, but all of those indices map to the same bank. Since the bank cannot serve all 32 different addresses simultaneously, these accesses must be serialized, meaning they are served one at a time rather than in parallel. Instead of servicing the warp's accesses in one conflict-free step, the hardware must perform 32 successive accesses to bank 0.
+
+This is a bank conflict: threads in the same warp access different memory addresses that map to the same bank. If multiple threads in a warp access the same memory address in the same bank, that is okay because the value can be retrieved once and provided to all of those threads.
+
+In the previous example, we looked at what happens when each thread in a warp accesses one `float`. Since there are 32 threads in a warp and each thread accesses one 4 byte `float`, the warp requests:
+
+$$
+32 \times 4 = 128 \text{ bytes}
+$$
+
+This matches the maximum amount of data that the 32 shared memory banks can serve in a single memory transaction:
+
+$$
+32 \text{ banks} \times 4 \text{ bytes per bank} = 128 \text{ bytes}
+$$
+
+But what happens if a warp instruction requests more than 128 bytes? Since shared memory can serve at most 128 bytes in a single transaction, the request must be split into multiple transactions. For example, consider the following instructions:
+
+```cuda
+uint32_t idx = tid * 4;
+float4 fourFloats = *reinterpret_cast<float4*>(&aShared[idx]);
+```
+
+where `tid` represents the thread ID. CUDA executes instructions at the warp level, so for this example consider the first warp, where `tid = 0, 1, ..., 31`.
+
+```text
+thread 0:  idx = 0 * 4 =    0. Accesses banks     (0-3) mod 32 =   (0-3)
+thread 1:  idx = 1 * 4 =    4. Accesses banks     (4-7) mod 32 =   (4-7)
+thread 2:  idx = 2 * 4 =    8. Accesses banks    (8-11) mod 32 =  (8-11)
+...
+thread 7:  idx = 7 * 4 =   28. Accesses banks   (28-31) mod 32 = (28-31)
+
+thread 8:  idx = 8 * 4 =   32. Accesses banks   (32-35) mod 32 =   (0-3)
+thread 9:  idx = 9 * 4 =   36. Accesses banks   (36-39) mod 32 =   (4-7)
+...
+thread 31: idx = 31 * 4 = 124. Accesses banks (124-127) mod 32 = (28-31)
+```
+
+Each thread now accesses four banks because each `float4` contains four 4 byte float values. Across the entire warp, the instruction requests:
+
+$$
+32 \times 16 = 512 \text{ bytes}
+$$
+
+At first, this may look like a bank conflict. For example, threads 0, 8, 16, and 24 all access banks 0 through 3, but they access different addresses within those banks. However, there is one important detail missing. A bank conflict is not determined by comparing every bank accessed by the entire warp wide request at once. Instead, bank conflicts are determined within each shared memory transaction. Since a single shared memory transaction can serve at most 128 bytes, a 512 byte request requires at least:
+
+$$
+\dfrac{512 \text{ bytes}}{128 \text{ bytes per memory transaction}}=4 \text{ memory transactions}
+$$
+
+even when there are no bank conflicts. For the access pattern above, those four transactions correspond to:
+
+```text
+transaction 1: threads  0-7  → 128 bytes → banks 0-31
+transaction 2: threads  8-15 → 128 bytes → banks 0-31
+transaction 3: threads 16-23 → 128 bytes → banks 0-31
+transaction 4: threads 24-31 → 128 bytes → banks 0-31
+```
+
+Within each transaction, every bank is accessed once. Therefore, each transaction can be served without any additional serialization. The fact that bank 0 is used again in a later transaction does not constitute a bank conflict.
+
+More precisely, a bank conflict occurs when the shared memory access pattern requires additional serialization beyond the minimum number of transactions required to serve the warp instruction. This happens when multiple accesses in the same transaction hit the same bank at different addresses. Therefore, when a warp requests more than 128 bytes, we should not analyze bank conflicts across the entire warp wide request at once. Instead, we analyze the bank accesses within each 128 byte transaction independently.
+
+For the access patterns considered so far, this gives us a simple rule of thumb. For each shared memory instruction, if each thread accesses one `float` address, threads in the warp should ideally access all 32 banks. If each thread accesses one unique `float4` address, the warp request is split into contiguous groups of eight threads, so within each group, accesses should ideally cover all 32 banks without any bank being used twice.
+
+Now that we've found the new access pattern we want, we need a way to actually create it in shared memory. One way to remove bank conflicts is to use a logical-to-physical mapping. Instead of storing each logical tile coordinate directly at the same physical location in shared memory, we map it to a different physical coordinate that gives us the bank-access pattern we want.
+
+### Fixing `aTile` Bank Conflicts
+
+So, we need to figure out how to map each logical coordinate $(x,y)$ to a physical coordinate $(x',y')$. This allows us to keep the same logical layout of aTile, while changing where each value is physically stored in shared memory to remove the bank conflicts.
+
+Let's go through how we can derive this mapping. More formally, we eventually need this mapping to be a **bijection**, meaning that it is both one-to-one and onto. One-to-one means that each logical coordinate maps to only one physical coordinate, while onto means that every physical coordinate gets mapped to by some logical coordinate.
+
+We can define our mapping as
+
+$$
+F:L\rightarrow P
+$$
+
+where $L$ is the set of logical coordinates and $P$ is the set of physical coordinates.
+
+Since logically `aTile` has 32 values in the $x$ direction and 128 values in the $y$ direction,
+
+$$
+L=\{0,\ldots,31\}\times\{0,\ldots,127\}.
+$$
+
+After the transpose, the physical coordinate space is
+
+$$
+P=\{0,\ldots,127\}\times\{0,\ldots,31\}.
+$$
+
+Both spaces contain
+
+$$
+32\cdot128=4096
+$$
+
+coordinates.
+
+We will prove that our final transformation is a bijection after deriving it.
+
+First, if we remember from the [vectorized kernel](#matrix-optimization-5-vectorization), we transposed `aTile`, so the first step in our function is to flip $(x,y)$.
+
+Function after adding step 1:
+
+$$
+F(x,y)=(y,x)
+$$
+
+Remember that when we write a coordinate as $(x,y)$, the actual array access is
+
+```cuda
+aTile[y][x]
+```
+
+because arrays are indexed as `[row][column]`, or `[y][x]`.
+
+For example, the logical coordinate
+
+$$
+(4,0)
+$$
+
+gets transformed into the physical coordinate
+
+$$
+(0,4),
+$$
+
+which corresponds to
+
+```cuda
+aTile[4][0]
+```
+
+in memory.
+
+The next step is to shift the transposed $x$ coordinate to the correct bank. I have provided the bank mapping for each thread below, along with its `aTileX` and `aTileY` values:
+
+| tid | aTileY | aTileX | Original Bank | Desired Bank | Bank Mapping |
+| ---: | ---: | ---: | ---: | ---: | :--- |
+| 0  | 0 | 0  | 0 | 0  | 0 → 0 |
+| 1  | 0 | 4  | 0 | 4  | 0 → 4 |
+| 2  | 0 | 8  | 0 | 8  | 0 → 8 |
+| 3  | 0 | 12 | 0 | 12 | 0 → 12 |
+| 4  | 0 | 16 | 0 | 16 | 0 → 16 |
+| 5  | 0 | 20 | 0 | 20 | 0 → 20 |
+| 6  | 0 | 24 | 0 | 24 | 0 → 24 |
+| 7  | 0 | 28 | 0 | 28 | 0 → 28 |
+| 8  | 1 | 0  | 1 | 1  | 1 → 1 |
+| 9  | 1 | 4  | 1 | 5  | 1 → 5 |
+| 10 | 1 | 8  | 1 | 9  | 1 → 9 |
+| 11 | 1 | 12 | 1 | 13 | 1 → 13 |
+| 12 | 1 | 16 | 1 | 17 | 1 → 17 |
+| 13 | 1 | 20 | 1 | 21 | 1 → 21 |
+| 14 | 1 | 24 | 1 | 25 | 1 → 25 |
+| 15 | 1 | 28 | 1 | 29 | 1 → 29 |
+| 16 | 2 | 0  | 2 | 2  | 2 → 2 |
+| 17 | 2 | 4  | 2 | 6  | 2 → 6 |
+| 18 | 2 | 8  | 2 | 10 | 2 → 10 |
+| 19 | 2 | 12 | 2 | 14 | 2 → 14 |
+| 20 | 2 | 16 | 2 | 18 | 2 → 18 |
+| 21 | 2 | 20 | 2 | 22 | 2 → 22 |
+| 22 | 2 | 24 | 2 | 26 | 2 → 26 |
+| 23 | 2 | 28 | 2 | 30 | 2 → 30 |
+| 24 | 3 | 0  | 3 | 3  | 3 → 3 |
+| 25 | 3 | 4  | 3 | 7  | 3 → 7 |
+| 26 | 3 | 8  | 3 | 11 | 3 → 11 |
+| 27 | 3 | 12 | 3 | 15 | 3 → 15 |
+| 28 | 3 | 16 | 3 | 19 | 3 → 19 |
+| 29 | 3 | 20 | 3 | 23 | 3 → 23 |
+| 30 | 3 | 24 | 3 | 27 | 3 → 27 |
+| 31 | 3 | 28 | 3 | 31 | 3 → 31 |
+
+You might be wondering why I included the `aTileX` and `aTileY` values. Which is fair, but look closely at the pattern that emerges. The desired bank is simply
+
+$$
+\text{Desired Bank}=\text{aTileX}+\text{aTileY}.
+$$
+
+Now we need to connect this bank pattern back to our physical coordinate. Remember that
+
+```cuda
+float aTile[32][128];
+```
+
+is stored in row-major order. Therefore, for a physical coordinate $(x',y')$, the flat index is
+
+$$
+I=128y'+x'.
+$$
+
+Since shared memory has 32 banks, the bank for a `float` is
+
+$$
+B=I\bmod32.
+$$
+
+Substituting the flat index gives
+
+$$
+B=(128y'+x')\bmod32.
+$$
+
+Since 128 is a multiple of 32,
+
+$$
+128y'\bmod32=0,
+$$
+
+so this simplifies to
+
+$$
+B=x'\bmod32.
+$$
+
+Therefore, for `aTile`, the physical $x$ coordinate determines which bank the value maps to.
+
+From the table above, we know that for the `toLoad.x` instruction we want
+
+$$
+x'=\text{aTileY}+\text{aTileX}.
+$$
+
+Using our logical coordinates, this is
+
+$$
+x'=y+x.
+$$
+
+The physical $y$ coordinate is still just the transposed logical $x$ coordinate:
+
+$$
+y'=x.
+$$
+
+Function after adding step 2:
+
+$$
+F(x,y)=(y+x,x)
+$$
+
+For the specific `toLoad.x` store we are analyzing, the values of $x$ and $y$ have a very useful structure because each thread loads a `float4`. Since each `float4` contains four floats, the starting logical $x$ coordinate for each thread advances by four:
+
+```text
+x: 0, 4, 8, 12, 16, 20, 24, 28
+```
+
+Within each thread group, $x$ therefore tells us the thread's position in that group, in steps of four banks. Meanwhile, $y$ identifies which of the four thread groups the thread belongs to:
+
+```text
+group 0 → y = 0
+group 1 → y = 1
+group 2 → y = 2
+group 3 → y = 3
+```
+
+This is why adding them is useful. The $x$ value spaces accesses four banks apart, while $y$ fills in the four banks between those multiples of four. Therefore,
+
+$$
+x' = x + y
+$$
+
+gives:
+
+```text
+y = 0:  0, 4,  8, 12, 16, 20, 24, 28
+y = 1:  1, 5,  9, 13, 17, 21, 25, 29
+y = 2:  2, 6, 10, 14, 18, 22, 26, 30
+y = 3:  3, 7, 11, 15, 19, 23, 27, 31
+```
+
+Together, these are all 32 banks exactly once, so the bank conflicts are removed for this instruction. However, this transformation was derived only from the `toLoad.x` store. We need a transformation that works for **all logical coordinates** in the tile, including the coordinates used by `toLoad.y`, `toLoad.z`, and `toLoad.w`. Here are the current instructions:
+
+```cuda
+const float4 toLoad = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
+
+aTile[aTileX + 0][aTileY] = toLoad.x;
+aTile[aTileX + 1][aTileY] = toLoad.y;
+aTile[aTileX + 2][aTileY] = toLoad.z;
+aTile[aTileX + 3][aTileY] = toLoad.w;
+```
+
+After the transpose, this can be thought of as:
+
+```cuda
+aTile[aTilePhysicalY + 0][aTilePhysicalX] = toLoad.x;
+aTile[aTilePhysicalY + 1][aTilePhysicalX] = toLoad.y;
+aTile[aTilePhysicalY + 2][aTilePhysicalX] = toLoad.z;
+aTile[aTilePhysicalY + 3][aTilePhysicalX] = toLoad.w;
+```
+
+So as we can see, with our `float4` load from `a`, the four values are stored in different rows of `aTile`, but in the same column. This is important because we want to preserve the transposed layout of these groups of four values. It also keeps the values arranged correctly for the aligned `float4` shared memory reads that we perform later in the kernel. For example, if `aTileX = 0`, the logical values are:
+
+```cuda
+aTile[0][aTileY] = toLoad.x;
+aTile[1][aTileY] = toLoad.y;
+aTile[2][aTileY] = toLoad.z;
+aTile[3][aTileY] = toLoad.w;
+```
+
+After the transpose, we want them to remain in the same physical column:
+
+```text
+aTile[0][aTilePhysicalX] = toLoad.x
+aTile[1][aTilePhysicalX] = toLoad.y
+aTile[2][aTilePhysicalX] = toLoad.z
+aTile[3][aTilePhysicalX] = toLoad.w
+```
+
+However, if we apply our current transformation
+
+$$
+F(x,y)=(y+x,x)
+$$
+
+independently to all four logical coordinates, we get:
+
+```text
+aTile[0][aTileY + 0] = toLoad.x
+aTile[1][aTileY + 1] = toLoad.y
+aTile[2][aTileY + 2] = toLoad.z
+aTile[3][aTileY + 3] = toLoad.w
+```
+
+Now each of the four values has been shifted into a different physical column. The problem is that the raw logical $x$ coordinate changes for each of the four values. Instead, we want all four logical $x$ coordinates belonging to the same `float4` group to use the **same column shift**. The pattern we want is:
+
+```text
+aTileX:  0  1  2  3 | 4  5  6  7 | 8  9 10 11 | 12 13 14 15 | ...
+shift:   0  0  0  0 | 4  4  4  4 | 8  8  8  8 | 12 12 12 12 | ...
+```
+
+In other words, we need to round $x$ down to the beginning of its group of four. This can be done with
+
+$$
+s=x-(x\bmod4),
+$$
+
+where $s$ denotes the shift. For example,
+
+$$
+x=6
+$$
+
+gives
+
+$$
+s=6-(6\bmod4)=6-2=4,
+$$
+
+while
+
+$$
+x=11
+$$
+
+gives
+
+$$
+s=11-(11\bmod4)=11-3=8.
+$$
+
+Thus, the shift changes from simply
+
+$$
+x
+$$
+
+to
+
+$$
+x-(x\bmod4).
+$$
+
+Function after adding step 3:
+
+$$
+F(x,y)= \left( y+x-(x\bmod4), x \right)
+$$
+
+At this point we have essentially found our transformation, but we are missing one thing. `aTile` has 128 columns, meaning the valid physical $x$ coordinates are
+
+$$
+0,\ldots,127.
+$$
+
+However, our transformed $x$ coordinate can go outside this range. The largest possible logical $y$ value is
+
+$$
+127,
+$$
+
+and the largest possible shift is
+
+$$
+28.
+$$
+
+Therefore, the transformed $x$ coordinate can be as large as
+
+$$
+127+28=155.
+$$
+
+To keep the physical $x$-coordinate inside the 128 columns of aTile, we wrap the transformed $x$-coordinate back into the valid range 0 to 127 using modulo 128.
+
+$$
+x'= \left( y+x-(x\bmod4) \right)\bmod128.
+$$
+
+Therefore, our final transformation is
+
+$$
+\boxed{ F(x,y)= \left( \left(y+x-(x\bmod4)\right)\bmod128, x \right) }
+$$
+
+There is one other useful property here. Taking the result modulo 128 does **not** change which bank the coordinate maps to, because 128 is itself a multiple of the 32 banks. For example,
+
+$$
+155\bmod128=27,
+$$
+
+but
+
+$$
+155\bmod32=27
+$$
+
+and
+
+$$
+27\bmod32=27.
+$$
+
+So the modulo 128 keeps the physical coordinate inside `aTile` while preserving the bank mapping that we designed. This gives us our final logical-to-physical coordinate transformation. Next, we need to prove that this transformation is actually a bijection.
+
+First, we prove that $F$ is one-to-one. Assume that $F$ is not one-to-one. Then there exist $(x_1,y_1),(x_2,y_2)\in L$ such that $(x_1,y_1)\neq(x_2,y_2)$ and $F(x_1,y_1)=F(x_2,y_2)$.
+
+Now,
+
+$$
+F(x_1,y_1)=F(x_2,y_2)
+\Leftrightarrow
+((y_1+x_1-(x_1\bmod4))\bmod128, x_1)
+=
+((y_2+x_2-(x_2\bmod4))\bmod128, x_2)
+$$
+
+which gives,
+
+$$
+\begin{aligned}
+(y_1+x_1-(x_1\bmod4))\bmod128
+&=
+(y_2+x_2-(x_2\bmod4))\bmod128 \\
+x_1 &= x_2
+\end{aligned}
+$$
+
+Let $x$ denote the common value of $x_1$ and $x_2$. Then,
+
+$$
+(y_1+x_1-(x_1\bmod4))\bmod128
+=
+(y_2+x_2-(x_2\bmod4))\bmod128
+\Leftrightarrow
+(y_1+x-(x\bmod4))\bmod128
+=
+(y_2+x-(x\bmod4))\bmod128.
+$$
+
+Let $c = x-(x\bmod4)$. Then,
+
+$$
+(y_1+c)\bmod128
+=
+(y_2+c)\bmod128.
+$$
+
+Thus, when dividing $y_1+c$ and $y_2+c$ by 128, they produce the same remainder
+
+$$
+r\in\{0,1,\dots,127\}.
+$$
+
+By the Division Algorithm, there exist integers $q_1,q_2\in\mathbb Z$ such that
+
+$$
+\begin{aligned}
+y_1+c&=128q_1+r \\
+y_2+c&=128q_2+r.
+\end{aligned}
+$$
+
+Solving both equations for $r$ gives
+
+$$
+\begin{aligned}
+r&=y_1+c-128q_1 \\
+r&=y_2+c-128q_2.
+\end{aligned}
+$$
+
+Therefore,
+
+$$
+\begin{aligned}
+y_1 + c- 128q_1 &= y_2 + c - 128q_2 \\
+y_1 + c - y_2 + c &= 128q_1 - 128q_2 \\
+y_1 - y_2 &= 128(q_1 - q_2) \quad \text{where } (q_1 - q_2) \in \mathbb{Z} \\
+y_1 - y_2 &= 128k \quad \text{where } k = q_1 - q_2.
+\end{aligned}
+$$
+
+Since $L= \{0,1,\dots,31\} \times \{0,1,\dots,127\}$, therefore $y_1,y_2\in\{0,1,\dots,127\}$. Thus, $(y_1 - y_2) \in \{-127, -126, \dots, -1, 0, 1, \dots 127\}$. Therefore, it must be that $k = 0$, meaning
+
+$$
+y_1 - y_2 = 128k \Leftrightarrow y_1 = y_2.
+$$
+
+Thus, it has been shown that $x_1 = x_2$ and $y_1 = y_2$, meaning $(x_1, y_1) = (x_2, y_2)$ which contradicts our assumption that $(x_1,y_1)\neq(x_2,y_2)$. Therefore, $F$ must be one-to-one.
+
+Now, we must prove that $F$ is onto.
+
+Since $F$ is one-to-one, by definition $F$ maps distinct elements of $L$ to distinct elements in $F(L)$. Therefore $|F(L)| = |L|$.
+
+Since $|L| = |P|$, therefore $|F(L)| = |P|$.
+
+By definition $F(L) \subseteq P$.
+
+Since $P$ is finite, any proper subset of $P$ must have strictly fewer elemnts than $P$. However, $|F(L)| = |P|$. Therefore, $F(L)$ cannot be a proper subset of $P$, so $F(L) = P$, proving that $F$ is onto.
+
+Since $F$ is one-to-one and onto, by definition $F$ is a bijection.
+
+Since we have proved that our logical-to-physical mapping is a bijection, we can be sure that every unique logical coordinate of `aTile` maps to exactly one unique physical coordinate, and every physical coordinate corresponds to exactly one logical coordinate.
+
+Thus, we can rearrange the physical layout of `aTile` to produce the bank-access pattern we want without losing or overwriting any values.
+
+Therefore, we have removed the bank conflicts when writing to `aTile`.
+
+### Fixing `bTile` Bank Conflicts
+
+First, let's analyze the current accesses to `bTile` from the [vectorized kernel](#matrix-optimization-5-vectorization) in this code:
+
+```cuda
+#pragma unroll
+for (uint32_t j = 0; j < COLS_PER_THREAD; j += FLOATS_PER_FLOAT4) {
+    *reinterpret_cast<float4*>(&bReg[j]) = *reinterpret_cast<float4*>(&bTile[dotIdx][tx * COLS_PER_THREAD + j]);
+}
+```
+
+We will freeze `dotIdx = 0`. I have made a table of the original and desired banks below for the first warp.
+
+Since we are reading a `float4` from `bTile`, each thread accesses four banks. As we discussed earlier, the warp-wide request is split into contiguous groups of eight threads, so it is easier to analyze threads 0–7 rather than the entire warp at once.
+
+First, we will look at the first iteration, where `j = 0`:
+
+| tid | tx | `tx * COLS_PER_THREAD + j` | Original Banks | Desired Banks | Bank Mapping |
+| ---: | ---: | ---: | :--- | :--- | :--- |
+| 0 | 0 | 0  | 0–3   | 0–3   | 0–3 → 0–3 |
+| 1 | 1 | 8  | 8–11  | 8–11  | 8–11 → 8–11 |
+| 2 | 2 | 16 | 16–19 | 16–19 | 16–19 → 16–19 |
+| 3 | 3 | 24 | 24–27 | 24–27 | 24–27 → 24–27 |
+| 4 | 4 | 32 | 0–3   | 4–7   | 0–3 → 4–7 |
+| 5 | 5 | 40 | 8–11  | 12–15 | 8–11 → 12–15 |
+| 6 | 6 | 48 | 16–19 | 20–23 | 16–19 → 20–23 |
+| 7 | 7 | 56 | 24–27 | 28–31 | 24–27 → 28–31 |
+
+Now, the second iteration, where `j = 4`:
+
+| tid | tx | `tx * COLS_PER_THREAD + j` | Original Banks | Desired Banks | Bank Mapping |
+| ---: | ---: | ---: | :--- | :--- | :--- |
+| 0 | 0 | 4  | 4–7   | 4–7   | 4–7 → 4–7 |
+| 1 | 1 | 12 | 12–15 | 12–15 | 12–15 → 12–15 |
+| 2 | 2 | 20 | 20–23 | 20–23 | 20–23 → 20–23 |
+| 3 | 3 | 28 | 28–31 | 28–31 | 28–31 → 28–31 |
+| 4 | 4 | 36 | 4–7   | 0–3   | 4–7 → 0–3 |
+| 5 | 5 | 44 | 12–15 | 8–11  | 12–15 → 8–11 |
+| 6 | 6 | 52 | 20–23 | 16–19 | 20–23 → 16–19 |
+| 7 | 7 | 60 | 28–31 | 24–27 | 28–31 → 24–27 |
+
+As we can see, in the `Desired Banks` column every bank from 0 through 31 is accessed exactly once within each 8-thread group, meaning there are no bank conflicts.
+
+The pattern is also fairly simple. For `tid` 0–3, we leave the mapping unchanged. For `tid` 4–7, we swap the four-bank group accessed between the `j = 0` and `j = 4` iterations.
+
+For example, for `tid = 4`:
+
+```text
+j = 0:  banks 0–3  → banks 4–7
+j = 4:  banks 4–7  → banks 0–3
+```
+
+So rather than simply shifting all of the accesses in one direction, we are effectively **swapping the two groups of four values within each group of eight values**.
+
+Now that we know the physical access pattern we want, we can derive a logical-to-physical mapping that produces it.
+
+For `bTile`, the bank conflicts come entirely from which columns of `bTile` the `float4` reads access. This means our mapping only needs to affect $x$, while $y$ can stay the same. Since `COLS_PER_THREAD = 8`, each thread is responsible for eight output columns. Therefore, for a given `tx`, the logical `bTile` $x$ coordinates used by that thread are
+
+$$
+8tx, 8tx+1, \dots, 8tx+7.
+$$
+
+This naturally divides the logical $x$ coordinates of `bTile` into groups of eight consecutive values. Within each group of eight logical `bTile` columns, the two loop iterations access two separate `float4`s. When `j = 0`, the thread reads the first four logical columns in the group:
+
+$$
+8tx, 8tx+1, 8tx+2, 8tx+3.
+$$
+
+When `j = 4`, the thread reads the next four logical columns:
+
+$$
+8tx+4, 8tx+5, 8tx+6, 8tx+7.
+$$
+
+Now, look at the logical $x$ coordinates in groups of eight:
+
+```text
+groupIdx:      0        1        2       3       4       5       6       7
+logical x:   0–7     8–15    16–23   24–31   32–39   40–47   48–55   56–63
+action:     keep     keep     keep    keep    swap    swap    swap    swap
+```
+
+Now that we know our rule for when we want to swap the two `float4` groups within our group of 8 logical $x$ values, we need to express this rule mathematically.
+
+We have 8 groups of 8 floats, where the first 4 groups are `keep` and the second 4 groups are `swap`. So, for these first 8 groups, our rule is to `swap` if
+
+$$
+\text{groupIdx} \geq 4.
+$$
+
+Now we just need to determine the group index for a given logical $x$ coordinate. Since each group contains 8 consecutive values, the group index is
+
+$$
+\left\lfloor \dfrac{x}{8} \right\rfloor.
+$$
+
+For example,
+
+$$
+x \in \{0,\dots,7\} \Rightarrow \text{groupIdx}=0,
+$$
+
+$$
+x \in \{8,\dots,15\} \Rightarrow \text{groupIdx}=1,
+$$
+
+and so on.
+
+This works for the first 8 groups, but what about group indices larger than 7? Since our `keep, keep, keep, keep, swap, swap, swap, swap` pattern repeats every 8 groups, we need to map the group index back into the range 0–7. We can do this using the $\bmod$ operator. This gives us the rule to `swap` if
+
+$$
+\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4
+$$
+
+Now, that we know how to determine if we need to swap an $x$ value, we need to figure out how to define an operation on $x$ to give us the desired swap. Considered $x = 38$, which from above we see is in `groupIdx = 4`, so we `swap` iteration 1 and iteration 2. Below is what we currently have:
+
+```text
+idx within group:  0   1  2  3 |  4  5  6  7
+logical x:         32 33 34 35 | 36 37 38 39
+```
+
+and this is what we want:
+
+```text
+idx within group:  0   1  2  3 |  4  5  6  7
+logical x:         36 37 38 39 | 32 33 34 35
+```
+
+For $x=38$, its index within the group is $38\bmod8=6.$ So before the swap, $x=38$ is at index 6 within the group. Looking at our desired layout, after swapping the two `float4` groups, $x=38$ should instead be at index 2:
+
+```text
+before: index 6
+after:  index 2
+```
+
+More generally, the swap we want is
+original idx:  0 1 2 3 | 4 5 6 7
+swapped idx:   4 5 6 7 | 0 1 2 3
+
+So we need an operation that maps
+
+$$
+0 \rightarrow 4, 1 \rightarrow 5, 2 \rightarrow 6, 3 \rightarrow 7,
+$$
+
+and
+
+$$
+4 \rightarrow 0, 5 \rightarrow 1, 6 \rightarrow 2, 7 \rightarrow 3.
+$$
+
+A simple way to get this is to add 4 to the `original idx` and then wrap the result back into the range 0–7 using modulo 8:
+
+$$
+\text{swapped idx} = (\text{original idx} + 4) \bmod 8.
+$$
+
+Here, the indices can be thought of as offsets within the group. To get the logical offset, or the `original idx`, we simply do
+
+$$
+x \bmod 8.
+$$
+
+Thus, the formula to get the physical offset, or `swapped idx`, is
+
+$$
+\text{physicalOffset} = ((x \bmod 8) + 4) \bmod 8
+$$
+
+Now that we have the physical offset within each group of 8 logical $x$ values, we need to get the physical $x$ coordinate $x'$. This is fairly easy to reason about. We already have the physical offset within the group, so we simply need to add it to the starting physical $x$ coordinate of that group of 8.
+
+The group index is
+
+$$
+\text{groupIdx} = \left\lfloor \dfrac{x}{8} \right\rfloor,
+$$
+
+so the starting $x$ coordinate of the group is
+
+$$
+8 \cdot \text{groupIdx} = 8\left\lfloor \dfrac{x}{8} \right\rfloor.
+$$
+
+Thus, when we `swap` a group of 8 logical $x$ values, the physical coordinate $x'$ is
+
+$$
+x' = 8\left\lfloor \dfrac{x}{8} \right\rfloor + ((x \bmod 8) + 4) \bmod 8
+$$
+
+Thus our logical-to-physical mapping function is given by:
+
+$$
+F: L \rightarrow P
+$$
+
+where
+
+$$
+F(x,y) =
+\begin{cases}
+\left(
+    8\left\lfloor \dfrac{x}{8} \right\rfloor + ((x \bmod 8) + 4) \bmod 8,y
+\right)
+&\text{ if } \left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4 \\[10pt]
+(x,y)
+&\text{ if } \left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 < 4.
+\end{cases}
+$$
+
+Here,
+
+$$
+L = P = \{0, 1, \dots, 127\} \times \{0, 1, \dots, 31\}
+$$
+
+where $L$ is the logical coordinate space and $P$ is the physical coordinate space.
+
+Now we prove that $F$ is a bijection. Since I don't feel like proving that $F$ is one-to-one directly as there are 3 cases I need to prove, we can instead prove that $F$ has an inverse
+
+$$
+F^{-1}: P \rightarrow L.
+$$
+
+We can do this since $F$ is a bijection if and only if $F^{-1}$ exists. Since $F$ is piecewise function with 2 cases, we need to prove that each case can be inverted.
+
+First, define the candidate inverse function
+
+$$
+G: P \rightarrow L
+$$
+
+where
+
+$$
+G(x,y) =
+\begin{cases}
+\left(
+    8\left\lfloor \dfrac{x}{8} \right\rfloor + ((x \bmod 8) + 4) \bmod 8,y
+\right)
+&\text{ if } \left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4 \\[10pt]
+(x,y)
+&\text{ if } \left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 < 4.
+\end{cases}
+$$
+
+To prove $F$ is invertible with inverse $G$ we must show that $\forall (x,y) \in L, (G \circ F)(x,y) = (x,y)$ and that $\forall (u,v) \in P, (F \circ G)(u,v) = (u,v)$.
+
+First, we show that $\forall (x,y) \in L, (G \circ F)(x,y) = (x,y)$.
+
+Let $(x,y) \in L$. Suppose $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 < 4$. Then
+
+$$
+(G \circ F)(x,y) = G(F(x,y)) = G(x,y) = (x,y)
+$$
+
+Now, suppose $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4$. Then
+
+$$
+(G \circ F)(x,y) = G(F(x,y))
+=
+G
+\left(
+    8\left\lfloor \dfrac{x}{8} \right\rfloor + ((x \bmod 8) + 4) \bmod 8,y
+\right)
+$$
+
+Now, let $g=\left\lfloor\dfrac{x}{8}\right\rfloor \in \mathbb{Z}$ and $r=x\bmod8 \in \mathbb{Z}, 0 \leq r < 8$. By the Division Algorithm,
+
+$$
+x = 8g + r
+$$
+
+Since $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4$, we have $g \bmod 8 \geq 4$.
+
+Now, let $s=(r+4)\bmod8$. Then $s\in\mathbb{Z}$ and $0\leq s<8$. Therefore,
+
+$$
+G
+\left(
+    8\left\lfloor \dfrac{x}{8} \right\rfloor + ((x \bmod 8) + 4) \bmod 8,y
+\right) =
+G(8g+s, y)
+$$
+
+Since, $0 \leq s < 8$ we have
+
+$$
+\left\lfloor \dfrac{8g+s}{8} \right\rfloor = g.
+$$
+
+Therefore,
+
+$$
+\left\lfloor\dfrac{8g+s}{8}\right\rfloor\bmod8
+=
+g\bmod8
+\geq4.
+$$
+
+And since, $((8g + s) \bmod8 + 4) \bmod 8 = (s + 4) \bmod 8$
+
+Therefore we have,
+
+$$
+G(8g+s,y)
+=
+\left(
+8g+((s+4)\bmod8),
+y
+\right).
+$$
+
+Since
+
+$$
+s=(r+4)\bmod8,
+$$
+
+we get
+
+$$
+\left(
+8g+((s+4)\bmod8),
+y
+\right)
+=
+\left(
+8g+
+\left(
+((r+4)\bmod8)+4
+\right)\bmod8,
+y
+\right).
+$$
+
+Using the property
+
+$$
+((a\bmod n)+b)\bmod n=(a+b)\bmod n \quad \text{for } a, b \in \mathbb{Z},
+$$
+
+we have
+
+$$
+\begin{aligned}
+\left(((r+4)\bmod8)+4\right)\bmod8
+&=(r+8)\bmod8\\
+&=r,
+\end{aligned}
+$$
+
+since $0\leq r<8$.
+
+Therefore,
+
+$$
+\left(
+8g+
+\left(
+((r+4)\bmod8)+4
+\right)\bmod8,
+y
+\right)
+=
+(8g+r,y).
+$$
+
+Earlier we showed that
+
+$$
+x=8g+r.
+$$
+
+Thus,
+
+$$
+(G\circ F)(x,y)=(x,y).
+$$
+
+Now, we need to show that $\forall (u,v)\in P,\quad (F\circ G)(u,v)=(u,v)$. However, notice that $L=P$ and $F$ and $G$ are defined by the exact same function. Therefore, $F=G$.
+
+Thus,
+$$
+F\circ G
+=
+F\circ F
+=
+G\circ F.
+$$
+
+We have already proved that $\forall (x,y)\in L$, $(G\circ F)(x,y)=(x,y)$.
+
+Since $L=P$, this result also holds for every $(u,v)\in P$. Therefore,
+
+$$
+(F\circ G)(u,v)
+=
+(G\circ F)(u,v)
+=
+(u,v).
+$$
+
+Thus,
+
+$$
+F\circ G=I_P
+$$
+
+and
+
+$$
+G\circ F=I_L.
+$$
+
+Therefore, $G=F^{-1}$, so $F$ is invertible. Hence, $F$ is a bijection.
+
+### The Kernel
+
+Since $F$ is a bijection, we can safely rearrange the physical layout of `bTile` according to this mapping without losing or overwriting any values. The mapping also gives us the desired bank-access pattern for both `float4` reads from `bTile`, removing the bank conflicts.
+
+With both the `aTile` and `bTile` logical-to-physical mappings complete, we can now apply them to the kernel. The final kernel is shown below:
+
+
+```cuda
+constexpr uint32_t BLOCK_X = 16;
+constexpr uint32_t BLOCK_Y = 16;
+constexpr uint32_t NUM_THREADS = BLOCK_X * BLOCK_Y;
+
+constexpr uint32_t ROWS_PER_THREAD = 8;
+constexpr uint32_t COLS_PER_THREAD = 8;
+
+constexpr uint32_t TILE_M = BLOCK_Y * ROWS_PER_THREAD;
+constexpr uint32_t TILE_N = BLOCK_X * COLS_PER_THREAD;
+constexpr uint32_t TILE_K = 32;
+
+constexpr uint32_t FLOATS_PER_FLOAT4 = 4;
+constexpr uint32_t FLOATS_PER_LOAD_PASS = NUM_THREADS * FLOATS_PER_FLOAT4;
+
+constexpr uint32_t A_TILE_ROW_STRIDE = FLOATS_PER_LOAD_PASS / TILE_K;
+constexpr uint32_t B_TILE_ROW_STRIDE = FLOATS_PER_LOAD_PASS / TILE_N;
+
+constexpr uint32_t BYTES_PER_FLOAT4 = 16;
+
+constexpr uint32_t FLOAT4_OFFSET_MASK = FLOATS_PER_FLOAT4 - 1u;
+constexpr uint32_t TILE_M_WRAP_MASK = TILE_M - 1u;
+
+constexpr uint32_t COLS_PER_THREAD_SHIFT = 3;
+
+
+struct TileCoord{
+    uint32_t x;
+    uint32_t y;
+};
+
+
+__device__ __forceinline__ TileCoord aTilePhysicalCoord(uint32_t logicalX, uint32_t logicalY) {
+    const uint32_t shift = logicalX & ~FLOAT4_OFFSET_MASK;
+    return TileCoord{(logicalY + shift) & TILE_M_WRAP_MASK, logicalX};
+}
+
+
+__device__ __forceinline__ TileCoord bTilePhysicalCoord(uint32_t logicalX, uint32_t logicalY) {
+    const uint32_t halfSwapMask = (logicalX >> COLS_PER_THREAD_SHIFT) & FLOATS_PER_FLOAT4;
+    return TileCoord{logicalX ^ halfSwapMask, logicalY};
+}
+
+
+__global__ void matMulCudaResolveBankConflictsKernel (
+    const float* __restrict__ a,
+    const float* __restrict__ b,
+    float* __restrict__ c,
+    uint32_t m,
+    uint32_t n,
+    uint32_t k
+) {
+    __shared__ __align__(BYTES_PER_FLOAT4) float aTile[TILE_K][TILE_M];
+    __shared__ __align__(BYTES_PER_FLOAT4) float bTile[TILE_K][TILE_N];
+
+    const uint32_t ty = threadIdx.y;
+    const uint32_t tx = threadIdx.x;
+    const uint32_t tid = ty * BLOCK_X + tx;
+    const uint32_t threadStartIdx = tid * FLOATS_PER_FLOAT4;
+
+    const uint32_t aTileYStart = threadStartIdx / TILE_K;
+    const uint32_t bTileYStart = threadStartIdx / TILE_N;
+
+    const uint32_t aTileX = threadStartIdx % TILE_K;
+    const uint32_t bTileX = threadStartIdx % TILE_N;
+
+    const uint32_t ayBlockStart = blockIdx.y * TILE_M;
+    const uint32_t bxBlockStart = blockIdx.x * TILE_N;
+
+    const uint32_t cyStart = ayBlockStart + ty * ROWS_PER_THREAD;
+    const uint32_t cxStart = bxBlockStart + tx * COLS_PER_THREAD;
+
+    const uint32_t bTilePhysicalX = bTilePhysicalCoord(bTileX, 0).x;
+    const uint32_t bTileReadXJ0 = bTilePhysicalCoord(tx * COLS_PER_THREAD + 0, 0).x;
+    const uint32_t bTileReadXJ4 = bTilePhysicalCoord(tx * COLS_PER_THREAD + FLOATS_PER_FLOAT4, 0).x;
+
+    __align__(BYTES_PER_FLOAT4) float aReg[ROWS_PER_THREAD];
+    __align__(BYTES_PER_FLOAT4) float bReg[COLS_PER_THREAD];
+    __align__(BYTES_PER_FLOAT4) float acc[ROWS_PER_THREAD][COLS_PER_THREAD] = {0.0f};
+
+    for (uint32_t tileStart = 0; tileStart < k; tileStart += TILE_K) {
+
+        #pragma unroll
+        for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_M; tileRowOffset += A_TILE_ROW_STRIDE) {
+            const uint32_t aTileY = tileRowOffset + aTileYStart;
+            const TileCoord aTileCoords = aTilePhysicalCoord(aTileX, aTileY);
+            const uint32_t ay = ayBlockStart + aTileY;;
+            const uint32_t ax = tileStart + aTileX;
+
+            const float4 toLoad = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
+            aTile[aTileCoords.y + 0][aTileCoords.x] = toLoad.x;
+            aTile[aTileCoords.y + 1][aTileCoords.x] = toLoad.y;
+            aTile[aTileCoords.y + 2][aTileCoords.x] = toLoad.z;
+            aTile[aTileCoords.y + 3][aTileCoords.x] = toLoad.w;
+        }
+
+        #pragma unroll
+        for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_K; tileRowOffset += B_TILE_ROW_STRIDE) {
+            const uint32_t bTileY = tileRowOffset + bTileYStart;
+            const uint32_t by = tileStart + bTileY;
+            const uint32_t bx = bxBlockStart + bTileX;
+
+            *reinterpret_cast<float4*>(&bTile[bTileY][bTilePhysicalX]) = *reinterpret_cast<const float4*>(&b[by * n + bx]);
+        }
+
+        __syncthreads();
+
+        #pragma unroll 16
+        for (uint32_t dotIdx = 0; dotIdx < TILE_K; dotIdx++) {
+
+            #pragma unroll
+            for (uint32_t i = 0; i < ROWS_PER_THREAD; i += FLOATS_PER_FLOAT4) {
+                const TileCoord aTileCoords = aTilePhysicalCoord(dotIdx, ty * ROWS_PER_THREAD + i);
+                *reinterpret_cast<float4*>(&aReg[i]) = *reinterpret_cast<float4*>(&aTile[aTileCoords.y][aTileCoords.x]);
+            }
+
+            *reinterpret_cast<float4*>(&bReg[0]) = *reinterpret_cast<float4*>(&bTile[dotIdx][bTileReadXJ0]);
+            *reinterpret_cast<float4*>(&bReg[4]) = *reinterpret_cast<float4*>(&bTile[dotIdx][bTileReadXJ4]);
+
+            #pragma unroll
+            for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
+                #pragma unroll
+                for (uint32_t j = 0; j < COLS_PER_THREAD; j++) {
+                    acc[i][j] += aReg[i] * bReg[j];
+                }
+            }
+        }
+
+        __syncthreads();
+    }
+
+    #pragma unroll
+    for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
+        const uint32_t cy = cyStart + i;
+
+        #pragma unroll
+        for (uint32_t j = 0; j < COLS_PER_THREAD; j += FLOATS_PER_FLOAT4) {
+            const uint32_t cx = cxStart + j;
+            *reinterpret_cast<float4*>(&c[cy * n + cx]) = *reinterpret_cast<float4*>(&acc[i][j]);
+        }
+    }
+}
+```
+
+The logical-to-physical mappings derived above are implemented in the `aTilePhysicalCoord` and `bTilePhysicalCoord` helper functions. These functions convert the logical shared memory coordinates into the physical coordinates used to store and read the values from `aTile` and `bTile`.
+
+This kernel is still an exact-fit kernel, so it only works when the matrix dimensions are exactly divisible by the tile dimensions. Since
+
+$$
+TILE_M = 128,\qquad TILE_N = 128,\qquad TILE_K = 32,
+$$
+
+we require
+
+$$
+m \bmod 128 = 0,\qquad
+n \bmod 128 = 0,\qquad
+k \bmod 32 = 0.
+$$
+
+This ensures that every output tile and every $K$-dimension tile is complete, so no boundary checks or partial tile handling are required.
+
+A general version of this kernel is also included in the repository for matrix dimensions that are not exact multiples of the tile dimensions.
