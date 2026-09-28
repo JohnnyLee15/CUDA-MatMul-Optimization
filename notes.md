@@ -2422,7 +2422,7 @@ $$
 
 where
 
-$$
+```math
 F(x,y) =
 \begin{cases}
 \left(
@@ -2432,7 +2432,7 @@ F(x,y) =
 (x,y)
 &\text{ if } \left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 < 4.
 \end{cases}
-$$
+```
 
 Here,
 
@@ -2458,7 +2458,7 @@ $$
 
 where
 
-$$
+```math
 G(x,y) =
 \begin{cases}
 \left(
@@ -2468,7 +2468,7 @@ G(x,y) =
 (x,y)
 &\text{ if } \left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 < 4.
 \end{cases}
-$$
+```
 
 To prove $F$ is invertible with inverse $G$ we must show that $\forall (x,y) \in L, (G \circ F)(x,y) = (x,y)$ and that $\forall (u,v) \in P, (F \circ G)(u,v) = (u,v)$.
 
