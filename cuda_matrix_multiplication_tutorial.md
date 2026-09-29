@@ -1665,6 +1665,8 @@ Since the output columns assigned to each thread are contiguous, four accumulate
 
 That is essentially all of the new logic introduced by the vectorized kernel compared with the 2D register tiled kernel. The tiling strategy, register accumulation, and synchronization remain fundamentally the same. The main difference is that memory movement is now organized around groups of four contiguous floats so that we can reduce the number of load and store instructions executed by the GPU.
 
+With the memory accesses now organized around groups of four contiguous floats, the next step is to look more closely at how these new shared memory access patterns behave and whether there are any inefficiencies left to remove.
+
 ## Matrix Optimization 6: Resolving Bank Conflicts
 
 ### Bank Conflicts
@@ -2869,3 +2871,5 @@ $$
 This ensures that every output tile and every $K$-dimension tile is complete, so no boundary checks or partial tile handling are required.
 
 A general version of this kernel is also included in the repository for matrix dimensions that are not exact multiples of the tile dimensions.
+
+With the shared memory bank conflicts removed, the next step is to reorganize how the work within each thread block is divided among warps so that each warp operates on its own output tile.
