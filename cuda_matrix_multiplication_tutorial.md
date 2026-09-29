@@ -1769,7 +1769,7 @@ Now that we've found the new access pattern we want, we need a way to actually c
 
 So, we need to figure out how to map each logical coordinate $(x,y)$ to a physical coordinate $(x',y')$. This allows us to keep the same logical layout of aTile, while changing where each value is physically stored in shared memory to remove the bank conflicts.
 
-Let's go through how we can derive this mapping. More formally, we eventually need this mapping to be a **bijection**, meaning that it is both one-to-one and onto. One-to-one means that each logical coordinate maps to only one physical coordinate, while onto means that every physical coordinate gets mapped to by some logical coordinate.
+Let's go through how we can derive this mapping. More formally, we eventually need this mapping to be a **bijection**, meaning that it is both one-to-one and onto. One-to-one means that distinct logical coordinates map to distinct physical coordinates, while onto means that every physical coordinate gets mapped to by some logical coordinate.
 
 We can define our mapping as
 
@@ -2134,9 +2134,23 @@ $$
 27\bmod32=27.
 $$
 
-So the modulo 128 keeps the physical coordinate inside `aTile` while preserving the bank mapping that we designed. This gives us our final logical-to-physical coordinate transformation. Next, we need to prove that this transformation is actually a bijection.
+So the modulo 128 keeps the physical coordinate inside `aTile` while preserving the bank mapping that we designed. This gives us our final logical-to-physical coordinate transformation.
 
-First, we prove that $F$ is one-to-one. Assume that $F$ is not one-to-one. Then there exist $(x_1,y_1),(x_2,y_2)\in L$ such that $(x_1,y_1)\neq(x_2,y_2)$ and $F(x_1,y_1)=F(x_2,y_2)$.
+Next, we show that $F$ is well-defined as a function
+
+$$
+F:L\rightarrow P.
+$$
+
+Let $(x,y)\in L$. Then $x\in\{0,1,\dots,31\}$ and $y\in\{0,1,\dots,127\}$. The physical $x$ coordinate is $x'=\left(y+x-(x\bmod4)\right)\bmod128$. By definition of modulo 128 and since $y+x-(x\bmod4)\geq0$, we have $x'\in\{0,1,\dots,127\}$. The physical $y$ coordinate is $y'=x$. Since $x\in\{0,1,\dots,31\}$, we have $y'\in\{0,1,\dots,31\}$. Therefore, $F(x,y)\in P$.
+
+Since the formula for $F$ gives exactly one ordered pair for every $(x,y)\in L$, $F$ is well-defined as a function
+
+$$
+F:L\rightarrow P.
+$$
+
+Now we prove that $F$ is a bijection. First, we prove that $F$ is one-to-one. Assume that $F$ is not one-to-one. Then there exist $(x_1,y_1),(x_2,y_2)\in L$ such that $(x_1,y_1)\neq(x_2,y_2)$ and $F(x_1,y_1)=F(x_2,y_2)$.
 
 Now,
 
@@ -2208,7 +2222,7 @@ Therefore,
 $$
 \begin{aligned}
 y_1 + c- 128q_1 &= y_2 + c - 128q_2 \\
-y_1 + c - y_2 + c &= 128q_1 - 128q_2 \\
+y_1 + c - y_2 - c &= 128q_1 - 128q_2 \\
 y_1 - y_2 &= 128(q_1 - q_2) \quad \text{where } (q_1 - q_2) \in \mathbb{Z} \\
 y_1 - y_2 &= 128k \quad \text{where } k = q_1 - q_2.
 \end{aligned}
@@ -2230,7 +2244,7 @@ Since $|L| = |P|$, therefore $|F(L)| = |P|$.
 
 By definition $F(L) \subseteq P$.
 
-Since $P$ is finite, any proper subset of $P$ must have strictly fewer elemnts than $P$. However, $|F(L)| = |P|$. Therefore, $F(L)$ cannot be a proper subset of $P$, so $F(L) = P$, proving that $F$ is onto.
+Since $P$ is finite, any proper subset of $P$ must have strictly fewer elements than $P$. However, $|F(L)| = |P|$. Therefore, $F(L)$ cannot be a proper subset of $P$, so $F(L) = P$, proving that $F$ is onto.
 
 Since $F$ is one-to-one and onto, by definition $F$ is a bijection.
 
@@ -2354,7 +2368,7 @@ $$
 \left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4
 $$
 
-Now, that we know how to determine if we need to swap an $x$ value, we need to figure out how to define an operation on $x$ to give us the desired swap. Considered $x = 38$, which from above we see is in `groupIdx = 4`, so we `swap` iteration 1 and iteration 2. Below is what we currently have:
+Now, that we know how to determine if we need to swap an $x$ value, we need to figure out how to define an operation on $x$ to give us the desired swap. Consider $x = 38$, which from above we see is in `groupIdx = 4`, so we `swap` iteration 1 and iteration 2. Below is what we currently have:
 
 ```text
 idx within group:  0   1  2  3 |  4  5  6  7
@@ -2457,13 +2471,36 @@ $$
 
 where $L$ is the logical coordinate space and $P$ is the physical coordinate space.
 
-Now we prove that $F$ is a bijection. Since I don't feel like proving that $F$ is one-to-one directly as there are 3 cases I need to prove, we can instead prove that $F$ has an inverse
+First, we show that $F$ is well-defined. That is, we need to show that every $(x,y) \in L$ is mapped to exactly one element of $P$.
+
+Let $(x,y)\in L$. Since $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8$ is an integer, exactly one of $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 < 4$ or $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4$ must hold. Therefore, exactly one case of $F$ applies.
+
+If $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 < 4$, then $F(x,y)=(x,y)$. Since $(x,y)\in L$ and $L=P$, we immediately have $F(x,y)\in P$.
+
+Now suppose $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4$. Let $g=\left\lfloor\dfrac{x}{8}\right\rfloor$ and $s=((x\bmod8)+4)\bmod8$. Then $F(x,y)=(8g+s,y)$. Since $(x,y)\in L$, we have $0\leq x\leq127$. Therefore, $0\leq g=\left\lfloor\dfrac{x}{8}\right\rfloor\leq15$.
+
+Also, since $(x\bmod8)+4\geq0$ and $s=((x\bmod8)+4)\bmod8$, by definition of modulo 8, $0\leq s\leq7$. Thus,
+$0\leq 8g+s\leq 8(15)+7=127$.
+
+Since $y$ is unchanged and $(x,y)\in L$, we also have $0\leq y\leq31$. Therefore,
+
+$$
+F(x,y)=(8g+s,y)\in P.
+$$
+
+So in either case, $F$ maps every element of $L$ to exactly one element of $P$. Hence, $F$ is well-defined as a function
+
+$$
+F:L\rightarrow P.
+$$
+
+Now we prove that $F$ is a bijection. Since $F$ is piecewise, proving that it is one-to-one directly would require considering several separate cases. Instead, we can prove that $F$ has an inverse
 
 $$
 F^{-1}: P \rightarrow L.
 $$
 
-We can do this since $F$ is a bijection if and only if $F^{-1}$ exists. Since $F$ is piecewise function with 2 cases, we need to prove that each case can be inverted.
+We can do this since $F$ is a bijection if and only if $F^{-1}$ exists.
 
 First, define the candidate inverse function
 
@@ -2485,7 +2522,15 @@ G(x,y) =
 \end{cases}
 ```
 
-To prove $F$ is invertible with inverse $G$ we must show that $\forall (x,y) \in L, (G \circ F)(x,y) = (x,y)$ and that $\forall (u,v) \in P, (F \circ G)(u,v) = (u,v)$.
+Since $L=P$ and $G$ is defined by the same piecewise rule as $F$, the argument above showing that $F$ is well-defined also shows that $G$ is well-defined. Therefore,
+
+$$
+G:P\rightarrow L
+$$
+
+is a well-defined function.
+
+To prove $F$ is invertible with inverse $G$, we must show that $\forall (x,y) \in L, (G \circ F)(x,y) = (x,y)$ and that $\forall (u,v) \in P, (F \circ G)(u,v) = (u,v)$.
 
 First, we show that $\forall (x,y) \in L, (G \circ F)(x,y) = (x,y)$.
 
@@ -2524,7 +2569,7 @@ G
 G(8g+s, y)
 $$
 
-Since, $0 \leq s < 8$ we have
+Since $0 \leq s < 8$, we have
 
 $$
 \left\lfloor \dfrac{8g+s}{8} \right\rfloor = g.
@@ -2539,9 +2584,7 @@ g\bmod8
 \geq4.
 ```
 
-And since, $((8g + s) \bmod8 + 4) \bmod 8 = (s + 4) \bmod 8$
-
-Therefore we have,
+Also, since $((8g + s) \bmod8 + 4) \bmod 8 = (s + 4) \bmod 8$, we have
 
 ```math
 G(8g+s,y)
