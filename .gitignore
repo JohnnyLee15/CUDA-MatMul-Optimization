@@ -1,2 +1,5 @@
 /build/
 /.vscode/
+/repo_sources.txt
+dump_repo_sources.sh
+/tmp/

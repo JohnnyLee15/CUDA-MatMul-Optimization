@@ -11,9 +11,10 @@ We begin with CUDA indexing and warps, then move through coalescing, shared memo
 - [Optimization 1: Global Memory Coalescing](#matrix-kernel-optimization-1-global-memory-coalescing)
 - [Optimization 2: Shared Memory](#matrix-kernel-optimization-2-shared-memory)
 - [Optimization 3: 1D Register Tiling](#matrix-kernel-optimization-3-1d-register-tiling)
-- [Optimization 4: 2D Register Tiling](#matrix-optimization-4-2d-register-tiling)
-- [Optimization 5: Vectorization](#matrix-optimization-5-vectorization)
-- [Optimization 6: Resolving Bank Conflicts](#matrix-optimization-6-resolving-bank-conflicts)
+- [Optimization 4: 2D Register Tiling](#matrix-kernel-optimization-4-2d-register-tiling)
+- [Optimization 5: Vectorization](#matrix-kernel-optimization-5-vectorization)
+- [Optimization 6: Resolving Bank Conflicts](#matrix-kernel-optimization-6-resolving-bank-conflicts)
+- [Optimization 7: Warp Tiling](#matrix-kernel-optimization-7-warp-tiling)
 
 ## Calculating Indexes
 
@@ -794,7 +795,7 @@ Therefore, the global memory writes remain coalesced even though each thread now
 
 Next, we extend register tiling to two dimensions, assigning each thread multiple output rows and columns so it can reuse values from both `aTile` and `bTile` across several calculations.
 
-## Matrix Optimization 4: 2D Register Tiling
+## Matrix Kernel Optimization 4: 2D Register Tiling
 
 The idea behind 2D register tiling directly builds off the previous optimization. In the 1D register tiled kernel, each thread calculated multiple output elements down a single column of the output matrix. We now extend this idea so that each thread calculates a small 2D patch of output elements instead. This allows us to further increase the arithmetic intensity with respect to shared memory.
 
@@ -1255,7 +1256,7 @@ for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
 
 With 2D register tiling established, the next optimization focuses on moving data with fewer instructions by combining four `float` values into one store/load operation. We do this by storing four floats in a single data type called `float4`.
 
-## Matrix Optimization 5: Vectorization
+## Matrix Kernel Optimization 5: Vectorization
 
 Like the other optimizations thus far, vectorization is another incremental optimization. As mentioned in the previous paragraph, this involves combining four floats into a single data type called `float4`, which allows us to load and store four floats with a single instruction, as opposed to four separate instructions.
 
@@ -1277,7 +1278,7 @@ First, let's look at this as if we were going to use a regular `float` data type
 
 which gives us perfect coalescing.
 
-This can easily be done using the same general loading logic we used in the [2D register tiled kernel](#matrix-optimization-4-2d-register-tiling). We have 32 threads in our warp, so we increment `i` by 32 so that each iteration skips over the 32 reads already performed by the previous iteration.
+This can easily be done using the same general loading logic we used in the [2D register tiled kernel](#matrix-kernel-optimization-4-2d-register-tiling). We have 32 threads in our warp, so we increment `i` by 32 so that each iteration skips over the 32 reads already performed by the previous iteration.
 
 ```cuda
 for (uint32_t i = tid; i < 128; i += 32) {
@@ -1487,7 +1488,7 @@ __global__ void matMulCudaVectorizedExactFitKernel (
 This is an exact-fit kernel, so it requires the matrix dimensions to be exactly divisible by the tile dimensions. Since
 
 $$
-TILE_M = 128,\qquad TILE_N = 128,\qquad TILE_K = 32,
+TILE\_M = 128,\qquad TILE\_N = 128,\qquad TILE\_K = 32,
 $$
 
 we require
@@ -1667,7 +1668,7 @@ That is essentially all of the new logic introduced by the vectorized kernel com
 
 With the memory accesses now organized around groups of four contiguous floats, the next step is to look more closely at how these new shared memory access patterns behave and whether there are any inefficiencies left to remove.
 
-## Matrix Optimization 6: Resolving Bank Conflicts
+## Matrix Kernel Optimization 6: Resolving Bank Conflicts
 
 ### Bank Conflicts
 
@@ -1803,7 +1804,7 @@ coordinates.
 
 We will prove that our final transformation is a bijection after deriving it.
 
-First, if we remember from the [vectorized kernel](#matrix-optimization-5-vectorization), we transposed `aTile`, so the first step in our function is to flip $(x,y)$.
+First, if we remember from the [vectorized kernel](#matrix-kernel-optimization-5-vectorization), we transposed `aTile`, so the first step in our function is to flip $(x,y)$.
 
 Function after adding step 1:
 
@@ -2258,7 +2259,7 @@ Therefore, we have removed the bank conflicts when writing to `aTile`.
 
 ### Fixing `bTile` Bank Conflicts
 
-First, let's analyze the current accesses to `bTile` from the [vectorized kernel](#matrix-optimization-5-vectorization) in this code:
+First, let's analyze the current accesses to `bTile` from the [vectorized kernel](#matrix-kernel-optimization-5-vectorization) in this code:
 
 ```cuda
 #pragma unroll
@@ -2707,7 +2708,6 @@ Since $F$ is a bijection, we can safely rearrange the physical layout of `bTile`
 
 With both the `aTile` and `bTile` logical-to-physical mappings complete, we can now apply them to the kernel. The final kernel is shown below:
 
-
 ```cuda
 constexpr uint32_t BLOCK_X = 16;
 constexpr uint32_t BLOCK_Y = 16;
@@ -2857,7 +2857,7 @@ The logical-to-physical mappings derived above are implemented in the `aTilePhys
 This kernel is still an exact-fit kernel, so it only works when the matrix dimensions are exactly divisible by the tile dimensions. Since
 
 $$
-TILE_M = 128,\qquad TILE_N = 128,\qquad TILE_K = 32,
+TILE\_M = 128,\qquad TILE\_N = 128,\qquad TILE\_K = 32,
 $$
 
 we require
@@ -2872,4 +2872,534 @@ This ensures that every output tile and every $K$-dimension tile is complete, so
 
 A general version of this kernel is also included in the repository for matrix dimensions that are not exact multiples of the tile dimensions.
 
-With the shared memory bank conflicts removed, the next step is to reorganize how the work within each thread block is divided among warps so that each warp operates on its own output tile.
+With the shared memory bank conflicts removed, the next step is to explicitly control the shape of the output tile assigned to each warp, rather than letting that shape be determined implicitly by the thread block layout.
+
+## Matrix Kernel Optimization 7: Warp tiling
+
+### What is Warp Tiling?
+
+In the previous kernel, each thread computes an `8 x 8` tile of the output matrix. However, we never explicitly assigned an output tile to each warp. Instead, the shape of the warp tile was determined implicitly by the arrangement of threads within the `16 x 16` thread block.
+
+Since each thread block contains `16 x 16` threads and each warp contains 32 threads, each block contains
+
+$$
+\dfrac{16 \text{ threads} \times 16 \text{ threads}}{32 \text{ threads per warp}} = 8 \text{ warps}.
+$$
+
+CUDA linearizes the threads in a block with the `x` dimension varying fastest. Therefore, each warp spans all 16 values of `tx` and two consecutive values of `ty`. The warps within the thread block are arranged as follows:
+
+```text
+16 x 16 thread block
+
+   tx: 0   1   2   3   4   5   6   7   8   9   10  11  12  13  14  15
+
+ty: +----------------------------------------------------------------+
+ 0  |                                                                |
+ 1  |                            Warp 0                              |
+    +----------------------------------------------------------------+
+ 2  |                                                                |
+ 3  |                            Warp 1                              |
+    +----------------------------------------------------------------+
+ 4  |                                                                |
+ 5  |                            Warp 2                              |
+    +----------------------------------------------------------------+
+ 6  |                                                                |
+ 7  |                            Warp 3                              |
+    +----------------------------------------------------------------+
+ 8  |                                                                |
+ 9  |                            Warp 4                              |
+    +----------------------------------------------------------------+
+10  |                                                                |
+11  |                            Warp 5                              |
+    +----------------------------------------------------------------+
+12  |                                                                |
+13  |                            Warp 6                              |
+    +----------------------------------------------------------------+
+14  |                                                                |
+15  |                            Warp 7                              |
+    +----------------------------------------------------------------+
+```
+
+Each warp therefore covers a `2 x 16` region of threads within the block. Since each thread computes an `8 x 8` output tile, each warp computes an output tile of size
+
+$$
+(2 \cdot 8) \times (16 \cdot 8) = 16 \times 128.
+$$
+
+The eight warps are stacked vertically within the block, so together they cover
+
+$$
+(8 \cdot 16) \times (16 \cdot 8) = 128 \times 128,
+$$
+
+which matches the `128 x 128` output tile computed by the entire thread block.
+
+Therefore, we already have warp tiling in the sense that each warp computes its own output tile. However, the shape and location of that tile are currently determined implicitly by the thread block layout. The warp tiling optimization makes this mapping explicit, allowing us to directly control the shape of the output tile assigned to each warp.
+
+The reason explicitly controlling the warp tile can be useful is that threads in a warp execute instructions together. When the threads in a warp load values from shared memory, the addresses requested by those threads are therefore accessed together. Changing the shape of the output tile assigned to a warp changes which `aTile` and `bTile` values are requested together by the 32 threads.
+
+For example, with the current `16 x 128` warp tile, the warp spans only two thread tiles in the $y$ direction but 16 thread tiles in the $x$ direction. During the accumulation phase, when each thread loads the `aTile` and `bTile` values needed for the current `dotIdx` into `aReg` and `bReg`, many threads within the warp request the same values from `aTile`, while they request many different values from `bTile`.
+
+```text
+Implicit warp tile: 16 x 128
+
+Each Ti = T0, T1, ..., T31 is one 8 x 8 thread tile.
+
+  threadTileX: 0    1    2    3    4    5    6    7    8    9    10   11   12   13   14   15
+threadTileY: +----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+
+          0  | T0 | T1 | T2 | T3 | T4 | T5 | T6 | T7 | T8 | T9 |T10 |T11 |T12 |T13 |T14 |T15 |
+             +----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+
+          1  |T16 |T17 |T18 |T19 |T20 |T21 |T22 |T23 |T24 |T25 |T26 |T27 |T28 |T29 |T30 |T31 |
+             +----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+----+
+
+Warp tile = 2 thread tiles high x 16 thread tiles wide
+          = (2 x 8) x (16 x 8)
+          = 16 x 128 outputs
+
+A access pattern:
+- only 2 thread tile rows
+- for a given A register load, many threads request the same aTile values
+
+B access pattern:
+- 16 thread tile columns
+- for a given B register load, threads request many different bTile values
+```
+
+If we instead make the warp tile taller and narrower, this relationship changes. During these same register loads, the warp requests more distinct values from `aTile`, but fewer distinct values from `bTile`.
+
+For example, consider the following:
+
+```text
+Example explicit warp tile: 128 x 16
+
+Each Ti = T0, T1, ..., T31 is one 8 x 8 thread tile.
+
+  threadTileX: 0    1
+threadTileY: +----+----+
+          0  | T0 | T1 |
+             +----+----+
+          1  | T2 | T3 |
+             +----+----+
+          2  | T4 | T5 |
+             +----+----+
+          3  | T6 | T7 |
+             +----+----+
+          4  | T8 | T9 |
+             +----+----+
+          5  |T10 |T11 |
+             +----+----+
+          6  |T12 |T13 |
+             +----+----+
+          7  |T14 |T15 |
+             +----+----+
+          8  |T16 |T17 |
+             +----+----+
+          9  |T18 |T19 |
+             +----+----+
+         10  |T20 |T21 |
+             +----+----+
+         11  |T22 |T23 |
+             +----+----+
+         12  |T24 |T25 |
+             +----+----+
+         13  |T26 |T27 |
+             +----+----+
+         14  |T28 |T29 |
+             +----+----+
+         15  |T30 |T31 |
+             +----+----+
+
+Warp tile = 16 thread tiles high x 2 thread tiles wide
+          = (16 x 8) x (2 x 8)
+          = 128 x 16 outputs
+
+A access pattern:
+- 16 thread tile rows
+- for a given A register load, threads request many different aTile values
+
+B access pattern:
+- only 2 thread tile columns
+- for a given B register load, many threads request the same bTile values
+```
+
+Therefore, changing the warp tile does not change the amount of work performed by the warp or the number of outputs computed by each thread. Instead, it changes how the shared memory accesses of the 32 threads are grouped together during the accumulation phase. This can change shared memory broadcasts, bank conflicts, and the overall cost of supplying operands to the warp.
+
+A shared memory broadcast occurs when multiple threads in a warp access the same shared memory address. The value only needs to be read from shared memory once and can then be broadcast to all threads in the warp that requested it.
+
+There is not necessarily one warp shape that is always better. Instead, making the warp tile explicit gives us another parameter that we can experiment with and tune for the GPU.
+
+### The Kernel
+
+With warp tiling and its benefits explained, below is the explicitly warp tiled kernel, where each warp computes a `128 x 16` output tile instead of the implicit `16 x 128` output tile from the previous kernel:
+
+```cuda
+constexpr uint32_t BLOCK_X = 16;
+constexpr uint32_t BLOCK_Y = 16;
+constexpr uint32_t NUM_THREADS = BLOCK_X * BLOCK_Y;
+
+constexpr uint32_t ROWS_PER_THREAD = 8;
+constexpr uint32_t COLS_PER_THREAD = 8;
+
+constexpr uint32_t TILE_M = BLOCK_Y * ROWS_PER_THREAD;
+constexpr uint32_t TILE_N = BLOCK_X * COLS_PER_THREAD;
+constexpr uint32_t TILE_K = 32;
+
+constexpr uint32_t WARP_TILE_M = 128;
+constexpr uint32_t WARP_TILE_N = 16;
+
+constexpr uint32_t WARP_TILES_PER_BLOCK_N = TILE_N / WARP_TILE_N;
+constexpr uint32_t THREAD_TILES_PER_WARP_N = WARP_TILE_N / COLS_PER_THREAD;
+
+constexpr uint32_t FLOATS_PER_FLOAT4 = 4;
+constexpr uint32_t FLOATS_PER_LOAD_PASS = NUM_THREADS * FLOATS_PER_FLOAT4;
+
+constexpr uint32_t A_TILE_ROW_STRIDE = FLOATS_PER_LOAD_PASS / TILE_K;
+constexpr uint32_t B_TILE_ROW_STRIDE = FLOATS_PER_LOAD_PASS / TILE_N;
+
+constexpr uint32_t BYTES_PER_FLOAT4 = 16;
+
+constexpr uint32_t FLOAT4_OFFSET_MASK = FLOATS_PER_FLOAT4 - 1u;
+constexpr uint32_t TILE_M_WRAP_MASK = TILE_M - 1u;
+constexpr uint32_t COLS_PER_THREAD_SHIFT = 3;
+
+constexpr uint32_t THREADS_PER_WARP = 32;
+
+struct TileCoord{
+    uint32_t x;
+    uint32_t y;
+};
+
+
+__device__ __forceinline__ TileCoord aTilePhysicalCoord(uint32_t logicalX, uint32_t logicalY) {
+    const uint32_t shift = logicalX & ~FLOAT4_OFFSET_MASK;
+    return TileCoord{(logicalY + shift) & TILE_M_WRAP_MASK, logicalX};
+}
+
+
+__device__ __forceinline__ TileCoord bTilePhysicalCoord(uint32_t logicalX, uint32_t logicalY) {
+    const uint32_t halfSwapMask = (logicalX >> COLS_PER_THREAD_SHIFT) & FLOATS_PER_FLOAT4;
+    return TileCoord{logicalX ^ halfSwapMask, logicalY};
+}
+
+
+__global__ void matMulCudaWarpTilingExactFitKernel (
+    const float* __restrict__ a,
+    const float* __restrict__ b,
+    float* __restrict__ c,
+    uint32_t m,
+    uint32_t n,
+    uint32_t k
+) {
+    __shared__ __align__(BYTES_PER_FLOAT4) float aTile[TILE_K][TILE_M];
+    __shared__ __align__(BYTES_PER_FLOAT4) float bTile[TILE_K][TILE_N];
+
+    const uint32_t ty = threadIdx.y;
+    const uint32_t tx = threadIdx.x;
+    const uint32_t tid = ty * BLOCK_X + tx;
+    const uint32_t threadStartIdx = tid * FLOATS_PER_FLOAT4;
+
+    const uint32_t warpId = tid / THREADS_PER_WARP;
+    const uint32_t warpThreadId = tid % THREADS_PER_WARP;
+
+    const uint32_t warpY = warpId / WARP_TILES_PER_BLOCK_N;
+    const uint32_t warpX = warpId % WARP_TILES_PER_BLOCK_N;
+
+    const uint32_t warpThreadY = warpThreadId / THREAD_TILES_PER_WARP_N;
+    const uint32_t warpThreadX = warpThreadId % THREAD_TILES_PER_WARP_N;
+
+    const uint32_t threadTileStartYInBlock = warpY * WARP_TILE_M + warpThreadY * ROWS_PER_THREAD;
+    const uint32_t threadTileStartXInBlock = warpX * WARP_TILE_N + warpThreadX * COLS_PER_THREAD;
+
+    const uint32_t aTileYStart = threadStartIdx / TILE_K;
+    const uint32_t bTileYStart = threadStartIdx / TILE_N;
+
+    const uint32_t aTileX = threadStartIdx % TILE_K;
+    const uint32_t bTileX = threadStartIdx % TILE_N;
+
+    const uint32_t ayBlockStart = blockIdx.y * TILE_M;
+    const uint32_t bxBlockStart = blockIdx.x * TILE_N;
+
+    const uint32_t cyStart = ayBlockStart + threadTileStartYInBlock;
+    const uint32_t cxStart = bxBlockStart + threadTileStartXInBlock;
+
+    const uint32_t bTilePhysicalX = bTilePhysicalCoord(bTileX, 0).x;
+
+    __align__(BYTES_PER_FLOAT4) float aReg[ROWS_PER_THREAD];
+    __align__(BYTES_PER_FLOAT4) float bReg[COLS_PER_THREAD];
+    __align__(BYTES_PER_FLOAT4) float acc[ROWS_PER_THREAD][COLS_PER_THREAD] = {0.0f};
+
+    for (uint32_t tileStart = 0; tileStart < k; tileStart += TILE_K) {
+
+        #pragma unroll
+        for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_M; tileRowOffset += A_TILE_ROW_STRIDE) {
+            const uint32_t aTileY = tileRowOffset + aTileYStart;
+            const TileCoord aTileCoords = aTilePhysicalCoord(aTileX, aTileY);
+            const uint32_t ay = ayBlockStart + aTileY;
+            const uint32_t ax = tileStart + aTileX;
+
+            const float4 toLoad = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
+            aTile[aTileCoords.y + 0][aTileCoords.x] = toLoad.x;
+            aTile[aTileCoords.y + 1][aTileCoords.x] = toLoad.y;
+            aTile[aTileCoords.y + 2][aTileCoords.x] = toLoad.z;
+            aTile[aTileCoords.y + 3][aTileCoords.x] = toLoad.w;
+        }
+
+        #pragma unroll
+        for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_K; tileRowOffset += B_TILE_ROW_STRIDE) {
+            const uint32_t bTileY = tileRowOffset + bTileYStart;
+            const uint32_t by = tileStart + bTileY;
+            const uint32_t bx = bxBlockStart + bTileX;
+
+            *reinterpret_cast<float4*>(&bTile[bTileY][bTilePhysicalX]) = *reinterpret_cast<const float4*>(&b[by * n + bx]);
+        }
+
+        __syncthreads();
+
+        #pragma unroll 16
+        for (uint32_t dotIdx = 0; dotIdx < TILE_K; dotIdx++) {
+
+            #pragma unroll
+            for (uint32_t i = 0; i < ROWS_PER_THREAD; i += FLOATS_PER_FLOAT4) {
+                const TileCoord aTileCoords = aTilePhysicalCoord(dotIdx, threadTileStartYInBlock + i);
+                *reinterpret_cast<float4*>(&aReg[i]) = *reinterpret_cast<float4*>(&aTile[aTileCoords.y][aTileCoords.x]);
+            }
+
+            #pragma unroll
+            for (uint32_t j = 0; j < COLS_PER_THREAD; j += FLOATS_PER_FLOAT4) {
+                const TileCoord bTileCoords = bTilePhysicalCoord(threadTileStartXInBlock + j, dotIdx);
+                *reinterpret_cast<float4*>(&bReg[j]) = *reinterpret_cast<float4*>(&bTile[bTileCoords.y][bTileCoords.x]);
+            }
+
+            #pragma unroll
+            for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
+                #pragma unroll
+                for (uint32_t j = 0; j < COLS_PER_THREAD; j++) {
+                    acc[i][j] += aReg[i] * bReg[j];
+                }
+            }
+        }
+
+        __syncthreads();
+    }
+
+    #pragma unroll
+    for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
+        const uint32_t cy = cyStart + i;
+
+        #pragma unroll
+        for (uint32_t j = 0; j < COLS_PER_THREAD; j += FLOATS_PER_FLOAT4) {
+            const uint32_t cx = cxStart + j;
+            *reinterpret_cast<float4*>(&c[cy * n + cx]) = *reinterpret_cast<float4*>(&acc[i][j]);
+        }
+    }
+}
+```
+
+`WARP_TILE_M = 128` and `WARP_TILE_N = 16` control the size of the output tile computed by each warp. Since each thread still computes an `8 x 8` output tile, a `128 x 16` warp tile contains
+
+$$
+\dfrac{128 \text{ output rows per warp tile}}
+{8 \text{ output rows per thread tile row}}
+\times
+\dfrac{16 \text{ output columns per warp tile}}
+{8 \text{ output columns per thread tile column}}=
+16 \text{ thread tile rows}
+\times
+2 \text{ thread tile columns}.
+$$
+
+Since a warp contains 32 threads and each thread computes one thread tile, this gives exactly one `8 x 8` thread tile per thread.
+
+You'll also see that `warpId` and `warpThreadId` have been calculated. `warpId` is the ID of the warp within the block. There are
+
+$$
+\dfrac{256 \text{ threads per block}}{32 \text{ threads per warp}} = 8 \text{ warps per block}
+$$
+
+Thus, $\text{warpId} \in \{0, 1, \dots, 7\}$, and it's calculated by
+
+$$
+\text{warpId} = \left\lfloor \dfrac{\text{tid}}{32} \right\rfloor
+$$
+
+since each consecutive group of 32 thread IDs belongs to one warp.
+
+`warpThreadId` is the ID of a thread within its warp and is given by
+
+$$
+\text{warpThreadId} = \text{tid}\bmod32
+$$
+
+Thus, $\text{warpThreadId} \in \{0, 1, \dots, 31\}$.
+
+Next, `warpX` and `warpY` give the coordinates of the warp tile within the block's `128 x 128` output tile. Each block computes
+
+```text
+TILE_N = BLOCK_X x COLS_PER_THREAD = 16 x 8 = 128
+```
+
+output columns, while each warp tile computes `WARP_TILE_N = 16` output columns. Therefore, the block contains
+
+$$
+\dfrac{128 \text{ output columns per block tile}}{16 \text{ output columns per warp tile}} = 8 \text{ warp tile columns per block tile}
+$$
+
+Since `warpId` identifies one of the eight warps in the block, its warp tile coordinates are
+
+$$
+\text{warpY} =
+\left\lfloor
+\dfrac{\text{warpId}}{8}
+\right\rfloor
+$$
+
+and
+
+$$
+\text{warpX} =
+\text{warpId}\bmod8.
+$$
+
+Because $\text{warpId} \in \{0, 1, \dots, 7\}$, we have $\text{warpY} = 0$ and $\text{warpX} \in \{0, 1, \dots, 7\}$.
+
+So each `128 x 128` block output tile is divided into eight `128 x 16` warp tiles:
+
+```text
+Each Wi = W0, W1, ..., W7 is one 128 x 16 warp tile.
+
+ warpX:  0    1    2    3    4    5    6    7
+warpY: +----+----+----+----+----+----+----+----+
+   0   | W0 | W1 | W2 | W3 | W4 | W5 | W6 | W7 |
+       +----+----+----+----+----+----+----+----+
+```
+
+Next, `warpThreadY` and `warpThreadX` give the coordinates of a thread tile within its warp tile. Each warp tile contains `WARP_TILE_N = 16` output columns, while each thread tile contains `COLS_PER_THREAD = 8` output columns. Therefore, there are
+
+$$
+\dfrac{16 \text{ output columns per warp tile}}
+{8 \text{ output columns per thread tile}} =
+2 \text{ thread tile columns per warp tile}.
+$$
+
+Since `warpThreadId` is the linear ID of the thread within the warp, we can convert it into thread tile coordinates using
+
+$$
+\text{warpThreadY}
+= \left\lfloor
+\dfrac{\text{warpThreadId}}{2}
+\right\rfloor
+$$
+
+and
+
+$$
+\text{warpThreadX} =
+\text{warpThreadId}\bmod2.
+$$
+
+Thus, $\text{warpThreadY} \in \{0, 1, \dots, 15\}$ as $\text{warpThreadId} \in \{0, 1, \dots, 31\}$ and $\text{warpThreadX} \in \{0, 1\}$.
+
+Each `128 x 16` warp tile therefore looks like:
+
+```text
+Each Ti = T0, T1, ..., T31 is one 8 x 8 thread tile.
+
+ warpThreadX:  0    1
+warpThreadY: +----+----+
+          0  | T0 | T1 |
+             +----+----+
+          1  | T2 | T3 |
+             +----+----+
+          2  | T4 | T5 |
+             +----+----+
+          3  | T6 | T7 |
+             +----+----+
+          4  | T8 | T9 |
+             +----+----+
+          5  |T10 |T11 |
+             +----+----+
+          6  |T12 |T13 |
+             +----+----+
+          7  |T14 |T15 |
+             +----+----+
+          8  |T16 |T17 |
+             +----+----+
+          9  |T18 |T19 |
+             +----+----+
+         10  |T20 |T21 |
+             +----+----+
+         11  |T22 |T23 |
+             +----+----+
+         12  |T24 |T25 |
+             +----+----+
+         13  |T26 |T27 |
+             +----+----+
+         14  |T28 |T29 |
+             +----+----+
+         15  |T30 |T31 |
+             +----+----+
+```
+
+The final indexing step is to calculate `threadTileStartYInBlock` and `threadTileStartXInBlock`. These are the starting coordinates of the thread's `8 x 8` output tile relative to the block's `128 x 128` output tile.
+
+For the $y$ coordinate, we first calculate the $y$ coordinate, relative to the block output tile, at which the warp's first thread tile begins.
+
+```text
+warpStartY = warpY * WARP_TILE_M
+```
+
+For this particular `128 x 16` warp layout, `warpY = 0` and `WARP_TILE_M = 128` so
+
+$$
+\text{warpStartY}= 0\cdot128= 0.
+$$
+
+Within the warp tile, the thread tile begins at
+
+```text
+threadStartYInWarp = warpThreadY * ROWS_PER_THREAD.
+```
+
+Thus, to get the starting $y$ coordinate of a particular thread tile relative to the entire block output tile, we add the $y$ coordinate of the first thread tile in the warp, `warpStartY`, to the starting $y$ coordinate of the current thread tile relative to that warp, `threadStartYInWarp`:
+
+```text
+threadTileStartYInBlock = warpStartY + threadStartYInWarp,
+```
+
+or directly,
+
+```text
+threadTileStartYInBlock = warpY * WARP_TILE_M + warpThreadY * ROWS_PER_THREAD.
+```
+
+The same logic applies for calculating `threadTileStartXInBlock`:
+
+```text
+threadTileStartXInBlock = warpX * WARP_TILE_N + warpThreadX * COLS_PER_THREAD.
+```
+
+The next change is to `cyStart` and `cxStart`. Logically, these calculations still serve the same purpose as in the previous kernel: they determine the global starting coordinates of the thread's output tile in `C`. The difference is that the thread's position inside the block output tile is now determined by the explicit warp mapping rather than directly by `ty` and `tx`.
+
+Therefore,
+
+```cuda
+const uint32_t cyStart = ayBlockStart + threadTileStartYInBlock;
+const uint32_t cxStart = bxBlockStart + threadTileStartXInBlock;
+```
+
+replaces the previous mapping
+
+```cuda
+const uint32_t cyStart = ayBlockStart + ty * ROWS_PER_THREAD;
+const uint32_t cxStart = bxBlockStart + tx * COLS_PER_THREAD;
+```
+
+Lastly, in the accumulator loops, you'll see we have replaced `ty * ROWS_PER_THREAD` and `tx * COLS_PER_THREAD` with `threadTileStartYInBlock` and `threadTileStartXInBlock` respectively. This makes sense because in the implicitly warp tiled kernel `ty * ROWS_PER_THREAD` is the thread tile $y$ start coordinate and `tx * COLS_PER_THREAD` is the thread tile $x$ start coordinate.
+
+That is the main change introduced by explicit warp tiling. The amount of work performed by the block, warp, and individual thread has not changed. The block still computes a `128 x 128` output tile, each warp still computes 2048 output values, and each thread still computes an `8 x 8` output tile. What has changed is how those thread tiles are grouped into warps and where each warp is placed within the block output tile.
+
+After benchmarking, the `128 x 16` warp tiled kernel was about 6% faster than the previous kernel. Interestingly, profiling showed that this new warp layout reintroduced shared memory bank conflicts.
+
+Despite these additional conflicts, the kernel was still faster overall. This is because changing the warp shape also changes how the 32 threads share and access `aTile` and `bTile`, as well as the overall execution pattern of the warp. The cost of the additional bank conflicts was therefore outweighed by the benefits of the new warp mapping.
+
+This is an important result: minimizing bank conflicts does not necessarily minimize the total execution time of the kernel. Warp shape introduces several interacting tradeoffs, so the fastest configuration cannot always be determined by optimizing a single metric in isolation.

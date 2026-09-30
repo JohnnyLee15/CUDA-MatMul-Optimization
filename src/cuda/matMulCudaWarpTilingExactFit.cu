@@ -85,8 +85,8 @@ __global__ void matMulCudaWarpTilingExactFitKernel (
     const uint32_t warpThreadY = warpThreadId / THREAD_TILES_PER_WARP_N;
     const uint32_t warpThreadX = warpThreadId % THREAD_TILES_PER_WARP_N;
 
-    const uint32_t threadStartY = warpY * WARP_TILE_M + warpThreadY * ROWS_PER_THREAD;
-    const uint32_t threadStartX = warpX * WARP_TILE_N + warpThreadX * COLS_PER_THREAD;
+    const uint32_t threadTileStartYInBlock = warpY * WARP_TILE_M + warpThreadY * ROWS_PER_THREAD;
+    const uint32_t threadTileStartXInBlock = warpX * WARP_TILE_N + warpThreadX * COLS_PER_THREAD;
 
     const uint32_t aTileYStart = threadStartIdx / TILE_K;
     const uint32_t bTileYStart = threadStartIdx / TILE_N;
@@ -97,12 +97,10 @@ __global__ void matMulCudaWarpTilingExactFitKernel (
     const uint32_t ayBlockStart = blockIdx.y * TILE_M;
     const uint32_t bxBlockStart = blockIdx.x * TILE_N;
 
-    const uint32_t cyStart = ayBlockStart + threadStartY;
-    const uint32_t cxStart = bxBlockStart + threadStartX;
+    const uint32_t cyStart = ayBlockStart + threadTileStartYInBlock;
+    const uint32_t cxStart = bxBlockStart + threadTileStartXInBlock;
 
     const uint32_t bTilePhysicalX = bTilePhysicalCoord(bTileX, 0).x;
-    const uint32_t bTileReadXJ0 = bTilePhysicalCoord(threadStartX + 0, 0).x;
-    const uint32_t bTileReadXJ4 = bTilePhysicalCoord(threadStartX + FLOATS_PER_FLOAT4, 0).x;
 
     __align__(BYTES_PER_FLOAT4) float aReg[ROWS_PER_THREAD];
     __align__(BYTES_PER_FLOAT4) float bReg[COLS_PER_THREAD];
@@ -140,12 +138,15 @@ __global__ void matMulCudaWarpTilingExactFitKernel (
 
             #pragma unroll
             for (uint32_t i = 0; i < ROWS_PER_THREAD; i += FLOATS_PER_FLOAT4) {
-                const TileCoord aTileCoords = aTilePhysicalCoord(dotIdx, threadStartY + i);
+                const TileCoord aTileCoords = aTilePhysicalCoord(dotIdx, threadTileStartYInBlock + i);
                 *reinterpret_cast<float4*>(&aReg[i]) = *reinterpret_cast<float4*>(&aTile[aTileCoords.y][aTileCoords.x]);
             }
 
-            *reinterpret_cast<float4*>(&bReg[0]) = *reinterpret_cast<float4*>(&bTile[dotIdx][bTileReadXJ0]);
-            *reinterpret_cast<float4*>(&bReg[4]) = *reinterpret_cast<float4*>(&bTile[dotIdx][bTileReadXJ4]);
+            #pragma unroll
+            for (uint32_t j = 0; j < COLS_PER_THREAD; j += FLOATS_PER_FLOAT4) {
+                const TileCoord bTileCoords = bTilePhysicalCoord(threadTileStartXInBlock + j, dotIdx);
+                *reinterpret_cast<float4*>(&bReg[j]) = *reinterpret_cast<float4*>(&bTile[bTileCoords.y][bTileCoords.x]);
+            }
 
             #pragma unroll
             for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
