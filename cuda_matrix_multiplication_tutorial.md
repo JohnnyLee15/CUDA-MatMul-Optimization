@@ -3403,3 +3403,5 @@ After benchmarking, the `128 x 16` warp tiled kernel was about 6% faster than th
 Despite these additional conflicts, the kernel was still faster overall. This is because changing the warp shape also changes how the 32 threads share and access `aTile` and `bTile`, as well as the overall execution pattern of the warp. The cost of the additional bank conflicts was therefore outweighed by the benefits of the new warp mapping.
 
 This is an important result: minimizing bank conflicts does not necessarily minimize the total execution time of the kernel. Warp shape introduces several interacting tradeoffs, so the fastest configuration cannot always be determined by optimizing a single metric in isolation.
+
+Since the warp tile shape is now an explicit parameter, the next step is to autotune the kernel by testing different combinations of block tile, warp tile, thread tile, and `TILE_K` sizes to determine which configuration performs best on the GPU.
