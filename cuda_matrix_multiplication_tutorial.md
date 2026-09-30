@@ -2874,7 +2874,7 @@ A general version of this kernel is also included in the repository for matrix d
 
 With the shared memory bank conflicts removed, the next step is to explicitly control the shape of the output tile assigned to each warp, rather than letting that shape be determined implicitly by the thread block layout.
 
-## Optimization 7: Warp tiling
+## Optimization 7: Warp Tiling
 
 ### What is Warp Tiling?
 
