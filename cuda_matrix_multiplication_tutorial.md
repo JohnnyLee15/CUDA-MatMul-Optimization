@@ -1,4 +1,4 @@
-# CUDA Matrix Optimization
+# CUDA Matrix Multiplication Optimization
 
 This tutorial follows the process of optimizing matrix multiplication on a CUDA GPU. We start with a straightforward kernel and improve it one step at a time, focusing on how threads access memory, reuse data, and divide up the calculation.
 
@@ -8,13 +8,13 @@ We begin with CUDA indexing and warps, then move through coalescing, shared memo
 
 - [Calculating Indexes](#calculating-indexes)
 - [Threads, Blocks, and Warps](#threads-blocks-and-warps)
-- [Optimization 1: Global Memory Coalescing](#matrix-kernel-optimization-1-global-memory-coalescing)
-- [Optimization 2: Shared Memory](#matrix-kernel-optimization-2-shared-memory)
-- [Optimization 3: 1D Register Tiling](#matrix-kernel-optimization-3-1d-register-tiling)
-- [Optimization 4: 2D Register Tiling](#matrix-kernel-optimization-4-2d-register-tiling)
-- [Optimization 5: Vectorization](#matrix-kernel-optimization-5-vectorization)
-- [Optimization 6: Resolving Bank Conflicts](#matrix-kernel-optimization-6-resolving-bank-conflicts)
-- [Optimization 7: Warp Tiling](#matrix-kernel-optimization-7-warp-tiling)
+- [Optimization 1: Global Memory Coalescing](#optimization-1-global-memory-coalescing)
+- [Optimization 2: Shared Memory](#optimization-2-shared-memory)
+- [Optimization 3: 1D Register Tiling](#optimization-3-1d-register-tiling)
+- [Optimization 4: 2D Register Tiling](#optimization-4-2d-register-tiling)
+- [Optimization 5: Vectorization](#optimization-5-vectorization)
+- [Optimization 6: Resolving Bank Conflicts](#optimization-6-resolving-bank-conflicts)
+- [Optimization 7: Warp Tiling](#optimization-7-warp-tiling)
 
 ## Calculating Indexes
 
@@ -137,7 +137,7 @@ The SM makes progress on all resident warps concurrently by interleaving their i
 
 This gives us the background needed to understand memory coalescing.
 
-## Matrix Kernel Optimization 1: Global Memory Coalescing
+## Optimization 1: Global Memory Coalescing
 
 ### Coalescing
 
@@ -321,7 +321,7 @@ Our naive kernel already coalesces its global memory accesses. `b` reads and `c`
 
 Next, we’ll explore shared memory tiling, where threads in a block cooperate to load tiles of `a` and `b` and reuse those values across multiple calculations, reducing repeated global memory loads.
 
-## Matrix Kernel Optimization 2: Shared Memory
+## Optimization 2: Shared Memory
 
 Shared memory is fast, programmer managed memory located on an SM. It is commonly used by first loading heavily reused data from slower global memory (VRAM) into shared memory, then repeatedly accessing that data from shared memory throughout the kernel.
 
@@ -491,7 +491,7 @@ if (cy < m && cx < n) {
 
 The next optimization shifts some of the work from thread level parallelism to per thread computation, allowing each thread to reuse loaded values across multiple outputs elements of `c`.
 
-## Matrix Kernel Optimization 3: 1D Register Tiling
+## Optimization 3: 1D Register Tiling
 
 The idea behind 1D register tiling is to assign each thread multiple output elements instead of having each thread calculate only one. A thread will typically compute 4 or 8 output elements. The “1D” refers to the fact that these outputs are assigned along a single dimension of the output matrix.
 
@@ -795,7 +795,7 @@ Therefore, the global memory writes remain coalesced even though each thread now
 
 Next, we extend register tiling to two dimensions, assigning each thread multiple output rows and columns so it can reuse values from both `aTile` and `bTile` across several calculations.
 
-## Matrix Kernel Optimization 4: 2D Register Tiling
+## Optimization 4: 2D Register Tiling
 
 The idea behind 2D register tiling directly builds off the previous optimization. In the 1D register tiled kernel, each thread calculated multiple output elements down a single column of the output matrix. We now extend this idea so that each thread calculates a small 2D patch of output elements instead. This allows us to further increase the arithmetic intensity with respect to shared memory.
 
@@ -1256,7 +1256,7 @@ for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
 
 With 2D register tiling established, the next optimization focuses on moving data with fewer instructions by combining four `float` values into one store/load operation. We do this by storing four floats in a single data type called `float4`.
 
-## Matrix Kernel Optimization 5: Vectorization
+## Optimization 5: Vectorization
 
 Like the other optimizations thus far, vectorization is another incremental optimization. As mentioned in the previous paragraph, this involves combining four floats into a single data type called `float4`, which allows us to load and store four floats with a single instruction, as opposed to four separate instructions.
 
@@ -1278,7 +1278,7 @@ First, let's look at this as if we were going to use a regular `float` data type
 
 which gives us perfect coalescing.
 
-This can easily be done using the same general loading logic we used in the [2D register tiled kernel](#matrix-kernel-optimization-4-2d-register-tiling). We have 32 threads in our warp, so we increment `i` by 32 so that each iteration skips over the 32 reads already performed by the previous iteration.
+This can easily be done using the same general loading logic we used in the [2D register tiled kernel](#optimization-4-2d-register-tiling). We have 32 threads in our warp, so we increment `i` by 32 so that each iteration skips over the 32 reads already performed by the previous iteration.
 
 ```cuda
 for (uint32_t i = tid; i < 128; i += 32) {
@@ -1668,7 +1668,7 @@ That is essentially all of the new logic introduced by the vectorized kernel com
 
 With the memory accesses now organized around groups of four contiguous floats, the next step is to look more closely at how these new shared memory access patterns behave and whether there are any inefficiencies left to remove.
 
-## Matrix Kernel Optimization 6: Resolving Bank Conflicts
+## Optimization 6: Resolving Bank Conflicts
 
 ### Bank Conflicts
 
@@ -1804,7 +1804,7 @@ coordinates.
 
 We will prove that our final transformation is a bijection after deriving it.
 
-First, if we remember from the [vectorized kernel](#matrix-kernel-optimization-5-vectorization), we transposed `aTile`, so the first step in our function is to flip $(x,y)$.
+First, if we remember from the [vectorized kernel](#optimization-5-vectorization), we transposed `aTile`, so the first step in our function is to flip $(x,y)$.
 
 Function after adding step 1:
 
@@ -2259,7 +2259,7 @@ Therefore, we have removed the bank conflicts when writing to `aTile`.
 
 ### Fixing `bTile` Bank Conflicts
 
-First, let's analyze the current accesses to `bTile` from the [vectorized kernel](#matrix-kernel-optimization-5-vectorization) in this code:
+First, let's analyze the current accesses to `bTile` from the [vectorized kernel](#optimization-5-vectorization) in this code:
 
 ```cuda
 #pragma unroll
@@ -2874,7 +2874,7 @@ A general version of this kernel is also included in the repository for matrix d
 
 With the shared memory bank conflicts removed, the next step is to explicitly control the shape of the output tile assigned to each warp, rather than letting that shape be determined implicitly by the thread block layout.
 
-## Matrix Kernel Optimization 7: Warp tiling
+## Optimization 7: Warp tiling
 
 ### What is Warp Tiling?
 
