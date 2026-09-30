@@ -54,6 +54,8 @@ bool Matrix::operator==(const Matrix &other) const {
 
     if (device == Device::CPU) {
         for (uint32_t i = 0; i < size; i++) {
+            if (!std::isfinite(buffer[i]) || !std::isfinite(other.buffer[i])) return false;
+
             if (
                 std::abs(other.buffer[i] - buffer[i]) >
                 ABS_TOL + REL_TOL * std::abs(other.buffer[i])

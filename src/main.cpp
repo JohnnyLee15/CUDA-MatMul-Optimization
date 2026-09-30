@@ -1,5 +1,8 @@
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+
+#include <cublas_v2.h>
 
 #include "cpu/matMulCpuNaive.h"
 #include "cuda/matMulCudaNaive.h"
@@ -10,6 +13,8 @@
 #include "cuda/matMulCudaVectorizedExactFit.h"
 #include "cuda/matMulCudaResolveBankConflictsGeneral.h"
 #include "cuda/matMulCudaResolveBankConflictsExactFit.h"
+#include "cuda/matMulCudaWarpTilingExactFit.h"
+#include "cuda/matMulCublas.h"
 #include "matrix.h"
 #include "device.h"
 #include "benchmark.h"
@@ -126,4 +131,18 @@ int main() {
         matMulCudaResolveBankConflictsExactFitLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
         "GPU Resolve Bank Conflicts Exact Fit", gpuVectorizedExactFitTime, "GPU Vectorized Exact Fit"
     );
+
+    float gpuWarpTilingExactFitTime = Benchmark::benchmarkMatMul(
+        aGpu, bGpu, cGpu, gtGpu,
+        matMulCudaWarpTilingExactFitLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
+        "GPU Warp Tiling Exact Fit", gpuResolveBankConflictsExactFitTime, "GPU Resolve Bank Conflicts Exact Fit"
+    );
+
+    matMulCublasInit();
+    Benchmark::benchmarkMatMul(
+        aGpu, bGpu, cGpu, gtGpu,
+        matMulCublasLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
+        "cuBLAS SGEMM", gpuWarpTilingExactFitTime, "GPU Warp Tiling Exact Fit"
+    );
+    matMulCublasShutdown();
 }

@@ -7,7 +7,7 @@ BUILD_DIR = build
 CXXFLAGS = -O3 -std=c++20
 CUDAFLAGS = -arch=sm_86
 INCLUDES = -Iinclude
-LDLIBS = -lcurand
+LDLIBS = -lcurand -lcublas
 
 SOURCES := $(shell find src -type f \( -name "*.cpp" -o -name "*.cu" \))
 

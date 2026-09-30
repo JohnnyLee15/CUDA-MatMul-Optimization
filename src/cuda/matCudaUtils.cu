@@ -25,6 +25,11 @@ __global__ void matCompareKernel(
 
     if (i >= n) return;
 
+    if (!isfinite(a[i]) || !isfinite(b[i])) {
+        atomicExch(mismatch, 1);
+        return;
+    }
+
     if (fabsf(a[i] - b[i]) > ABS_TOL + REL_TOL * fabsf(b[i])) {
         atomicExch(mismatch, 1);
     }
