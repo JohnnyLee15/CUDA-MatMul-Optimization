@@ -4,23 +4,13 @@
 
 #include <cuda_runtime.h>
 
-#include "cuda/matMulCudaWarpTilingExactFit.h"
+#include "matMulAutotune.h"
 #include "matrix.h"
 #include "cudaCheck.h"
 
 
-constexpr uint32_t FLOATS_PER_FLOAT4 = 4;
-constexpr uint32_t BYTES_PER_FLOAT4 = 16;
-constexpr uint32_t THREADS_PER_WARP = 32;
-
-constexpr uint32_t FLOAT4_OFFSET_MASK = FLOATS_PER_FLOAT4 - 1u;
-constexpr uint32_t TILE_M_WRAP_MASK = TILE_M - 1u;
-constexpr uint32_t COLS_PER_THREAD_SHIFT = 3;
-
 constexpr uint32_t BLOCK_Y = {{ BLOCK_Y }};
 constexpr uint32_t BLOCK_X = {{ BLOCK_X }};
-
-constexpr uint32_t NUM_THREADS = {{ NUM_THREADS }};
 
 constexpr uint32_t ROWS_PER_THREAD = {{ ROWS_PER_THREAD }};
 constexpr uint32_t COLS_PER_THREAD = {{ COLS_PER_THREAD }};
@@ -35,10 +25,16 @@ constexpr uint32_t WARP_TILE_N = {{ WARP_TILE_N }};
 constexpr uint32_t WARP_TILES_PER_BLOCK_N = {{ WARP_TILES_PER_BLOCK_N }};
 constexpr uint32_t THREAD_TILES_PER_WARP_N = {{ THREAD_TILES_PER_WARP_N }};
 
-constexpr uint32_t FLOATS_PER_LOAD_PASS = {{ FLOATS_PER_LOAD_PASS }};
-
 constexpr uint32_t A_TILE_ROW_STRIDE = {{ A_TILE_ROW_STRIDE }};
 constexpr uint32_t B_TILE_ROW_STRIDE = {{ B_TILE_ROW_STRIDE }};
+
+constexpr uint32_t FLOATS_PER_FLOAT4 = 4;
+constexpr uint32_t BYTES_PER_FLOAT4 = 16;
+constexpr uint32_t THREADS_PER_WARP = 32;
+
+constexpr uint32_t FLOAT4_OFFSET_MASK = FLOATS_PER_FLOAT4 - 1u;
+constexpr uint32_t TILE_M_WRAP_MASK = TILE_M - 1u;
+constexpr uint32_t COLS_PER_THREAD_SHIFT = 3;
 
 
 namespace {
@@ -133,7 +129,7 @@ __global__ void matMulCudaWarpTilingExactFitKernel (
 
         __syncthreads();
 
-        #pragma unroll 16
+        #pragma unroll {{ ACC_LOOP_UNROLL }}
         for (uint32_t dotIdx = 0; dotIdx < TILE_K; dotIdx++) {
 
             #pragma unroll
@@ -174,7 +170,7 @@ __global__ void matMulCudaWarpTilingExactFitKernel (
 }
 
 
-void matMulCudaWarpTilingExactFitLaunch(const Matrix &a, const Matrix &b, Matrix &c) {
+void matMulAutotuneLaunch(const Matrix &a, const Matrix &b, Matrix &c) {
     uint32_t m = c.nrows();
     uint32_t n = c.ncols();
     uint32_t k = a.ncols();

@@ -44,6 +44,8 @@ class Benchmark {
         static void printSpeedUp(float oldTime, float newTime, const char *speedUpOver);
 
     public:
+        static constexpr float VALIDATION_FAILED_DURATION = -1.0f;
+
         Benchmark() = delete;
 
         template <typename F>
@@ -58,6 +60,17 @@ class Benchmark {
             const char *testName,
             float compareTime = NO_COMPARISON,
             const char *speedUpOver = nullptr
+        );
+
+        template <typename F>
+        static float measureMatMul(
+            const Matrix &a,
+            const Matrix &b,
+            Matrix &c,
+            const Matrix &gt,
+            F matMul,
+            uint32_t numRuns,
+            uint32_t numWarmups
         );
 };
 

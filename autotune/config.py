@@ -4,12 +4,19 @@ from .constants import FLOATS_PER_FLOAT4
 
 
 @dataclass(frozen=True)
+class MatrixSizes:
+    m: int
+    n: int
+    k: int
+
+
+@dataclass(frozen=True)
 class Config:
     block_x: int
     block_y: int
 
-    rows_per_tile_thread: int
-    cols_per_tile_thread: int
+    rows_per_thread_tile: int
+    cols_per_thread_tile: int
 
     tile_k: int
 
@@ -26,12 +33,12 @@ class Config:
 
     @property
     def tile_m(self) -> int:
-        return self.block_y * self.rows_per_tile_thread
+        return self.block_y * self.rows_per_thread_tile
 
 
     @property
     def tile_n(self) -> int:
-        return self.block_x * self.cols_per_tile_thread
+        return self.block_x * self.cols_per_thread_tile
 
 
     @property
@@ -41,7 +48,7 @@ class Config:
 
     @property
     def thread_tiles_per_warp_n(self) -> int:
-        return self.warp_tile_n // self.cols_per_tile_thread
+        return self.warp_tile_n // self.cols_per_thread_tile
 
 
     @property
@@ -64,10 +71,10 @@ class Config:
         return (
             f"bx_{self.block_x}_"
             f"by_{self.block_y}_"
-            f"ttm_{self.rows_per_tile_thread}_"
-            f"ttn_{self.cols_per_tile_thread}_"
+            f"ttm_{self.rows_per_thread_tile}_"
+            f"ttn_{self.cols_per_thread_tile}_"
             f"btk_{self.tile_k}_"
             f"wtm_{self.warp_tile_m}_"
             f"wtn_{self.warp_tile_n}_"
-            f"unroll{self.acc_loop_unroll}"
+            f"unroll_{self.acc_loop_unroll}"
         )

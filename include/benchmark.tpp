@@ -71,6 +71,41 @@ float Benchmark::runCuda(
 
 
 template <typename F>
+float Benchmark::measureMatMul(
+    const Matrix &a,
+    const Matrix &b,
+    Matrix &c,
+    const Matrix &gt,
+    F matMul,
+    uint32_t numRuns,
+    uint32_t numWarmups
+) {
+    if (numRuns == 0) {
+        std::fprintf(stderr, "Invalid benchmark runs=%u\n", numRuns);
+        std::abort();
+    }
+
+    validateMatMul(a, b, c);
+    warmup(a, b, c, matMul, numWarmups);
+
+    float totalDurationMs;
+    if (a.getDevice() == Device::CUDA) {
+        totalDurationMs = runCuda(a, b, c, matMul, numRuns);
+    } else if (a.getDevice() == Device::CPU) {
+        totalDurationMs = runCpu(a, b, c, matMul, numRuns);
+    } else {
+        std::abort();
+    }
+
+    if (c != gt) {
+        return VALIDATION_FAILED_DURATION;
+    }
+
+    return totalDurationMs / numRuns;
+}
+
+
+template <typename F>
 float Benchmark::benchmarkMatMul(
     const Matrix &a,
     const Matrix &b,
@@ -83,36 +118,28 @@ float Benchmark::benchmarkMatMul(
     float compareTime,
     const char *speedUpOver
 ) {
-    if (numRuns == 0) {
-        std::fprintf(stderr, "Invalid benchmark runs=%u\n", numRuns);
-        std::abort();
-    }
-
-    validateMatMul(a, b, c);
-
     printSep(SEP_CHAR);
     std::printf("Benchmarking %s\n", testName);
     printSep(TITLE_UNDERLINE_CHAR);
 
-    std::printf("Warming up with %u runs...\n", numWarmups);
-    warmup(a, b, c, matMul, numWarmups);
+    std::printf("Warmup runs: %u\n", numWarmups);
+    std::printf("Timed runs: %u\n", numRuns);
 
-    std::printf("Benchmarking with %u runs...\n", numRuns);
-    float totalDurationMs;
-    if (a.getDevice() == Device::CUDA) {
-        totalDurationMs = runCuda(a, b, c, matMul, numRuns);
-    } else if (a.getDevice() == Device::CPU) {
-        totalDurationMs = runCpu(a, b, c, matMul, numRuns);
-    } else {
-        std::abort();
+    float avgDurationMs = measureMatMul(
+        a, b, c, gt, matMul, numRuns, numWarmups
+    );
+
+    if (avgDurationMs == VALIDATION_FAILED_DURATION) {
+        std::printf("Validation of output vs ground truth: FAIL\n");
+        printSep(SEP_CHAR, true);
+        return VALIDATION_FAILED_DURATION;
     }
 
-    float avgDurationMs = totalDurationMs / numRuns;
     double gflops = (2.0 * c.nrows() * c.ncols() * a.ncols()) / (1e6 * avgDurationMs);
 
+    std::printf("Validation of output vs ground truth: PASS\n");
     std::printf("Avg duration: %.3fms\n", avgDurationMs);
     std::printf("Performance: %.2f GFLOPS\n", gflops);
-    std::printf("Validation of output vs ground truth: %s\n", (c == gt) ? "PASS" : "FAIL");
 
     if (compareTime != NO_COMPARISON && speedUpOver != nullptr)  {
         printSpeedUp(compareTime, avgDurationMs, speedUpOver);

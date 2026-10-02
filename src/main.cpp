@@ -145,4 +145,6 @@ int main() {
         "cuBLAS SGEMM", gpuWarpTilingExactFitTime, "GPU Warp Tiling Exact Fit"
     );
     matMulCublasShutdown();
+
+    return EXIT_SUCCESS;
 }
