@@ -1,5 +1,8 @@
 from pathlib import Path
 
+
+KERNEL_RESOURCE_LIMIT_EXIT_CODE = 2
+
 THREADS_PER_WARP = 32
 FLOATS_PER_FLOAT4 = 4
 

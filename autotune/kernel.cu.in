@@ -170,6 +170,21 @@ __global__ void matMulCudaWarpTilingExactFitKernel (
 }
 
 
+bool matMulAutotuneCanLaunch() {
+    int blockSize = BLOCK_X * BLOCK_Y;
+    int activeBlocksPerSm = 0;
+
+    CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &activeBlocksPerSm,
+        matMulCudaWarpTilingExactFitKernel,
+        blockSize,
+        0
+    ));
+
+    return activeBlocksPerSm > 0;
+}
+
+
 void matMulAutotuneLaunch(const Matrix &a, const Matrix &b, Matrix &c) {
     uint32_t m = c.nrows();
     uint32_t n = c.ncols();
@@ -189,4 +204,3 @@ void matMulAutotuneLaunch(const Matrix &a, const Matrix &b, Matrix &c) {
     matMulCudaWarpTilingExactFitKernel<<<gridDim, blockDim>>>(a.data(), b.data(), c.data(), m, n, k);
     CUDA_CHECK(cudaGetLastError());
 }
-

@@ -13,26 +13,15 @@ from .constants import THREADS_PER_WARP, OBJECTS_DIR, EXECUTABLES_DIR
 
 NUM_COMPILE_WORKERS = 16
 
-# BLOCK_X_SWEEP = (1, 2, 4, 8, 16, 32, 64, 128)
-# BLOCK_Y_SWEEP = (1, 2, 4, 8, 16, 32, 64, 128)
-
-# ROWS_PER_THREAD_TILE_SWEEP = (4, 8, 16)
-# COLS_PER_THREAD_TILE_SWEEP = (4, 8, 16)
-
-# TILE_K_SWEEP = (4, 8, 16, 32, 64, 128)
-# ACC_LOOP_UNROLL_SWEEP = (1, 2, 4, 8, 16, 32, 64)
-# THREAD_TILES_PER_WARP_N_SWEEP = (1, 2, 4, 8, 16, 32)
-
-BLOCK_X_SWEEP = (8, 16, 32)
-BLOCK_Y_SWEEP = (8, 16, 32)
+BLOCK_X_SWEEP = (1, 2, 4, 8, 16, 32, 64, 128)
+BLOCK_Y_SWEEP = (1, 2, 4, 8, 16, 32, 64, 128)
 
 ROWS_PER_THREAD_TILE_SWEEP = (4, 8, 16)
 COLS_PER_THREAD_TILE_SWEEP = (4, 8, 16)
 
-TILE_K_SWEEP = (8, 16, 32, 64)
-ACC_LOOP_UNROLL_SWEEP = (16, 32)
-THREAD_TILES_PER_WARP_N_SWEEP = (8, 16, 32)
-
+TILE_K_SWEEP = (4, 8, 16, 32, 64, 128)
+ACC_LOOP_UNROLL_SWEEP = (1, 2, 4, 8, 16, 32, 64)
+THREAD_TILES_PER_WARP_N_SWEEP = (1, 2, 4, 8, 16, 32)
 
 
 def _cleanup_generated_files(keep_top_k_kernels: int, results: list[tuple[str, float, Path]]) -> None:
@@ -132,6 +121,12 @@ def run_sweep(matrix_sizes: MatrixSizes, keep_top_k_kernels: int) -> list[tuple[
     for i, (config, kernel_path, executable_path) in enumerate(built_candidates, start=1):
         print(f"Benchmarking {i}/{len(configs)}: {config.name}", flush=True)
         time = run_benchmark(executable_path, matrix_sizes.m, matrix_sizes.n, matrix_sizes.k)
+
+        if time is None:
+            print(f"Skipping {config.name}: insufficient kernel resources.", flush=True)
+            kernel_path.unlink(missing_ok=True)
+            continue
+
         benchmark_results.append((config.name, time, kernel_path))
 
     benchmark_results = sorted(benchmark_results, key=lambda x: x[1])

@@ -3,10 +3,12 @@ from pathlib import Path
 from .config import MatrixSizes
 from .constants import RESULT_FILE_PREFIX, RESULTS_DIR
 
+
 RANK_COL_NAME = "Rank"
 CONFIG_COL_NAME = "Config"
-AVG_DURATION_COL_NAME = "Avg Duration Ms"
-SPACE_BETWEEN_COLS = " " * 2
+AVG_DURATION_COL_NAME = "Avg_Duration_Ms"
+GAP = " | "
+HEADER_SEPARATOR_CHAR = "-"
 
 
 def _get_col_widths(benchmark_results: list[tuple[str, float, Path]]) -> tuple[int, int, int]:
@@ -14,9 +16,9 @@ def _get_col_widths(benchmark_results: list[tuple[str, float, Path]]) -> tuple[i
     width_config = len(CONFIG_COL_NAME)
     width_duration = len(AVG_DURATION_COL_NAME)
 
-    for _, name, duration in benchmark_results:
-        width_config = max(width_config, name)
-        width_duration = max(width_duration, str(duration))
+    for name, duration, _ in benchmark_results:
+        width_config = max(width_config, len(name))
+        width_duration = max(width_duration, len(str(duration)))
 
     return width_rank, width_config, width_duration
 
@@ -32,18 +34,24 @@ def write_results(benchmark_results: list[tuple[str, float, Path]], matrix_sizes
 
     results_path = RESULTS_DIR / results_filename
     width_rank, width_config, width_duration = _get_col_widths(benchmark_results)
-    gap = SPACE_BETWEEN_COLS
 
     with open(results_path, "w", encoding="utf-8") as file:
         file.write(
-            f"{RANK_COL_NAME:<{width_rank}}{gap}"
-            f"{CONFIG_COL_NAME:<{width_config}}{gap}"
+            f"{RANK_COL_NAME:<{width_rank}}{GAP}"
+            f"{CONFIG_COL_NAME:<{width_config}}{GAP}"
             f"{AVG_DURATION_COL_NAME:<{width_duration}}\n"
         )
+
+        file.write(
+            f"{HEADER_SEPARATOR_CHAR * width_rank}{GAP}"
+            f"{HEADER_SEPARATOR_CHAR * width_config}{GAP}"
+            f"{HEADER_SEPARATOR_CHAR * width_duration}\n"
+        )
+
         for rank, (name, duration, _) in enumerate(benchmark_results, start=1):
             file.write(
-                f"{rank:<{width_rank}}{gap}"
-                f"{name:<{width_config}}{gap}"
+                f"{rank:<{width_rank}}{GAP}"
+                f"{name:<{width_config}}{GAP}"
                 f"{duration:>{width_duration}}\n"
             )
 

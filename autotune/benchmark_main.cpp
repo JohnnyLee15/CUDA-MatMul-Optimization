@@ -10,6 +10,9 @@
 #include <cuda/matMulCudaNaive.h>
 #include <matMulAutotune.h>
 
+
+constexpr uint32_t KERNEL_RESOURCE_LIMIT_EXIT_CODE = 2;
+
 constexpr uint32_t NUM_ARGS = 4;
 
 constexpr uint32_t NUM_WARM_UPS = 3;
@@ -43,6 +46,10 @@ int main(int argc, char *argv[]) {
     ) {
         std::fprintf(stderr, "M, N, and K must be positive uint32_t integers.\n");
         return EXIT_FAILURE;
+    }
+
+    if (!matMulAutotuneCanLaunch()) {
+        return KERNEL_RESOURCE_LIMIT_EXIT_CODE;
     }
 
     Matrix a(m, k, Device::CUDA);
