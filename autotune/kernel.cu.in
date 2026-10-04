@@ -12,8 +12,8 @@
 constexpr uint32_t BLOCK_Y = {{ BLOCK_Y }};
 constexpr uint32_t BLOCK_X = {{ BLOCK_X }};
 
-constexpr uint32_t ROWS_PER_THREAD = {{ ROWS_PER_THREAD }};
-constexpr uint32_t COLS_PER_THREAD = {{ COLS_PER_THREAD }};
+constexpr uint32_t ROWS_PER_THREAD_TILE = {{ ROWS_PER_THREAD_TILE }};
+constexpr uint32_t COLS_PER_THREAD_TILE = {{ COLS_PER_THREAD_TILE }};
 
 constexpr uint32_t TILE_M = {{ TILE_M }};
 constexpr uint32_t TILE_N = {{ TILE_N }};
@@ -22,8 +22,14 @@ constexpr uint32_t TILE_K = {{ TILE_K }};
 constexpr uint32_t WARP_TILE_M = {{ WARP_TILE_M }};
 constexpr uint32_t WARP_TILE_N = {{ WARP_TILE_N }};
 
+constexpr uint32_t WARP_SUBTILES_PER_WARP_TILE_M = {{ WARP_SUBTILES_PER_WARP_TILE_M }};
+constexpr uint32_t WARP_SUBTILES_PER_WARP_TILE_N = {{ WARP_SUBTILES_PER_WARP_TILE_N }};
+
+constexpr uint32_t WARP_SUBTILE_M = {{ WARP_SUBTILE_M }};
+constexpr uint32_t WARP_SUBTILE_N = {{ WARP_SUBTILE_N }};
+
 constexpr uint32_t WARP_TILES_PER_BLOCK_N = {{ WARP_TILES_PER_BLOCK_N }};
-constexpr uint32_t THREAD_TILES_PER_WARP_N = {{ THREAD_TILES_PER_WARP_N }};
+constexpr uint32_t THREAD_TILES_PER_WARP_SUBTILE_N = {{ THREAD_TILES_PER_WARP_SUBTILE_N }};
 
 constexpr uint32_t A_TILE_ROW_STRIDE = {{ A_TILE_ROW_STRIDE }};
 constexpr uint32_t B_TILE_ROW_STRIDE = {{ B_TILE_ROW_STRIDE }};
@@ -78,11 +84,11 @@ __global__ void matMulCudaWarpTilingExactFitKernel (
     const uint32_t warpY = warpId / WARP_TILES_PER_BLOCK_N;
     const uint32_t warpX = warpId % WARP_TILES_PER_BLOCK_N;
 
-    const uint32_t warpThreadY = warpThreadId / THREAD_TILES_PER_WARP_N;
-    const uint32_t warpThreadX = warpThreadId % THREAD_TILES_PER_WARP_N;
+    const uint32_t warpThreadY = warpThreadId / THREAD_TILES_PER_WARP_SUBTILE_N;
+    const uint32_t warpThreadX = warpThreadId % THREAD_TILES_PER_WARP_SUBTILE_N;
 
-    const uint32_t threadTileStartYInBlock = warpY * WARP_TILE_M + warpThreadY * ROWS_PER_THREAD;
-    const uint32_t threadTileStartXInBlock = warpX * WARP_TILE_N + warpThreadX * COLS_PER_THREAD;
+    const uint32_t threadTileStartYInBlock = warpY * WARP_TILE_M + warpThreadY * ROWS_PER_THREAD_TILE;
+    const uint32_t threadTileStartXInBlock = warpX * WARP_TILE_N + warpThreadX * COLS_PER_THREAD_TILE;
 
     const uint32_t aTileYStart = threadStartIdx / TILE_K;
     const uint32_t bTileYStart = threadStartIdx / TILE_N;
@@ -98,9 +104,11 @@ __global__ void matMulCudaWarpTilingExactFitKernel (
 
     const uint32_t bTilePhysicalX = bTilePhysicalCoord(bTileX, 0).x;
 
-    __align__(BYTES_PER_FLOAT4) float aReg[ROWS_PER_THREAD];
-    __align__(BYTES_PER_FLOAT4) float bReg[COLS_PER_THREAD];
-    __align__(BYTES_PER_FLOAT4) float acc[ROWS_PER_THREAD][COLS_PER_THREAD] = {0.0f};
+    __align__(BYTES_PER_FLOAT4) float aReg[WARP_SUBTILES_PER_WARP_TILE_M][ROWS_PER_THREAD_TILE];
+    __align__(BYTES_PER_FLOAT4) float bReg[WARP_SUBTILES_PER_WARP_TILE_N][COLS_PER_THREAD_TILE];
+    __align__(BYTES_PER_FLOAT4) float acc[WARP_SUBTILES_PER_WARP_TILE_M]
+                                         [WARP_SUBTILES_PER_WARP_TILE_N]
+                                         [ROWS_PER_THREAD_TILE][COLS_PER_THREAD_TILE] = {0.0f};
 
     for (uint32_t tileStart = 0; tileStart < k; tileStart += TILE_K) {
 
@@ -133,22 +141,36 @@ __global__ void matMulCudaWarpTilingExactFitKernel (
         for (uint32_t dotIdx = 0; dotIdx < TILE_K; dotIdx++) {
 
             #pragma unroll
-            for (uint32_t i = 0; i < ROWS_PER_THREAD; i += FLOATS_PER_FLOAT4) {
-                const TileCoord aTileCoords = aTilePhysicalCoord(dotIdx, threadTileStartYInBlock + i);
-                *reinterpret_cast<float4*>(&aReg[i]) = *reinterpret_cast<float4*>(&aTile[aTileCoords.y][aTileCoords.x]);
-            }
-
-            #pragma unroll
-            for (uint32_t j = 0; j < COLS_PER_THREAD; j += FLOATS_PER_FLOAT4) {
-                const TileCoord bTileCoords = bTilePhysicalCoord(threadTileStartXInBlock + j, dotIdx);
-                *reinterpret_cast<float4*>(&bReg[j]) = *reinterpret_cast<float4*>(&bTile[bTileCoords.y][bTileCoords.x]);
-            }
-
-            #pragma unroll
-            for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
+            for (uint32_t subtileY = 0; subtileY < WARP_SUBTILES_PER_WARP_TILE_M; subtileY++) {
                 #pragma unroll
-                for (uint32_t j = 0; j < COLS_PER_THREAD; j++) {
-                    acc[i][j] += aReg[i] * bReg[j];
+                for (uint32_t i = 0; i < ROWS_PER_THREAD_TILE; i += FLOATS_PER_FLOAT4) {
+                    const uint32_t aTileLogicalY = threadTileStartYInBlock + subtileY * WARP_SUBTILE_M + i;
+                    const TileCoord aTileCoords = aTilePhysicalCoord(dotIdx, aTileLogicalY);
+                    *reinterpret_cast<float4*>(&aReg[subtileY][i]) = *reinterpret_cast<const float4*>(&aTile[aTileCoords.y][aTileCoords.x]);
+                }
+            }
+
+            #pragma unroll
+            for (uint32_t subtileX = 0; subtileX < WARP_SUBTILES_PER_WARP_TILE_N; subtileX++) {
+                #pragma unroll
+                for (uint32_t j = 0; j < COLS_PER_THREAD_TILE; j += FLOATS_PER_FLOAT4) {
+                    const uint32_t bTileLogicalX = threadTileStartXInBlock + subtileX * WARP_SUBTILE_N + j;
+                    const TileCoord bTileCoords = bTilePhysicalCoord(bTileLogicalX, dotIdx);
+                    *reinterpret_cast<float4*>(&bReg[subtileX][j]) = *reinterpret_cast<const float4*>(&bTile[bTileCoords.y][bTileCoords.x]);
+                }
+            }
+
+            #pragma unroll
+            for (uint32_t subtileY = 0; subtileY < WARP_SUBTILES_PER_WARP_TILE_M; subtileY++) {
+                #pragma unroll
+                for (uint32_t subtileX = 0; subtileX < WARP_SUBTILES_PER_WARP_TILE_N; subtileX++) {
+                    #pragma unroll
+                    for (uint32_t i = 0; i < ROWS_PER_THREAD_TILE; i++) {
+                        #pragma unroll
+                        for (uint32_t j = 0; j < COLS_PER_THREAD_TILE; j++) {
+                            acc[subtileY][subtileX][i][j] += aReg[subtileY][i] * bReg[subtileX][j];
+                        }
+                    }
                 }
             }
         }
@@ -157,18 +179,22 @@ __global__ void matMulCudaWarpTilingExactFitKernel (
     }
 
     #pragma unroll
-    for (uint32_t i = 0; i < ROWS_PER_THREAD; i++) {
-        const uint32_t cy = cyStart + i;
-
+    for (uint32_t subtileY = 0; subtileY < WARP_SUBTILES_PER_WARP_TILE_M; subtileY++) {
         #pragma unroll
-        for (uint32_t j = 0; j < COLS_PER_THREAD; j += FLOATS_PER_FLOAT4) {
-            const uint32_t cx = cxStart + j;
-            *reinterpret_cast<float4*>(&c[cy * n + cx]) = *reinterpret_cast<float4*>(&acc[i][j]);
+        for (uint32_t subtileX = 0; subtileX < WARP_SUBTILES_PER_WARP_TILE_N; subtileX++) {
+            #pragma unroll
+            for (uint32_t i = 0; i < ROWS_PER_THREAD_TILE; i++) {
+                const uint32_t cy = cyStart + subtileY * WARP_SUBTILE_M + i;
+                #pragma unroll
+                for (uint32_t j = 0; j < COLS_PER_THREAD_TILE; j += FLOATS_PER_FLOAT4) {
+                    const uint32_t cx = cxStart + subtileX * WARP_SUBTILE_N + j;
+                    *reinterpret_cast<float4*>(&c[cy * n + cx]) = *reinterpret_cast<float4*>(&acc[subtileY][subtileX][i][j]);
+                }
+            }
         }
     }
 }
 }
-
 
 bool matMulAutotuneCanLaunch() {
     int blockSize = BLOCK_X * BLOCK_Y;

@@ -14,6 +14,8 @@
 #include "cuda/matMulCudaResolveBankConflictsGeneral.h"
 #include "cuda/matMulCudaResolveBankConflictsExactFit.h"
 #include "cuda/matMulCudaWarpTilingExactFit.h"
+#include "cuda/matMulCudaWarpTilingGeneral.h"
+#include "cuda/matMulCudaSubWarpTilingExactFit.h"
 #include "cuda/matMulCublas.h"
 #include "matrix.h"
 #include "device.h"
@@ -55,25 +57,6 @@ void printBenchmarkSize() {
 int main() {
     clearScreen();
     printBenchmarkSize();
-
-    // Matrix aCpu(M, K, Device::CPU);
-    // Matrix bCpu(K, N, Device::CPU);
-    // Matrix cCpu(M, N, Device::CPU);
-    // Matrix gtCpu(M, N, Device::CPU);
-
-    // aCpu.initRandom(MIN_RANDOM_NUMBER, MAX_RANDOM_NUMBER);
-    // bCpu.initRandom(MIN_RANDOM_NUMBER, MAX_RANDOM_NUMBER);
-    // matMulCpuNaiveKernel(aCpu, bCpu, gtCpu);
-
-    // Matrix aGpu = aCpu.to(Device::CUDA);
-    // Matrix bGpu = bCpu.to(Device::CUDA);
-    // Matrix gtGpu = gtCpu.to(Device::CUDA);
-    // Matrix cGpu = Matrix(M, N, Device::CUDA);
-
-    // float cpuNaiveTime = Benchmark::benchmarkMatMul(
-    //     aCpu, bCpu, cCpu, gtCpu,
-    //     matMulCpuNaiveKernel, NUM_RUNS_CPU, NUM_WARM_UPS_CPU, "CPU Naive"
-    // );
 
     Matrix aGpu(M, K, Device::CUDA);
     Matrix bGpu(K, N, Device::CUDA);
@@ -132,17 +115,30 @@ int main() {
         "GPU Resolve Bank Conflicts Exact Fit", gpuVectorizedExactFitTime, "GPU Vectorized Exact Fit"
     );
 
+    float gpuWarpTilingGeneralTime = Benchmark::benchmarkMatMul(
+        aGpu, bGpu, cGpu, gtGpu,
+        matMulCudaWarpTilingGeneralLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
+        "GPU Warp Tiling General", gpuResolveBankConflictsGeneralTime, "GPU Resolve Bank Conflicts General"
+    );
+
     float gpuWarpTilingExactFitTime = Benchmark::benchmarkMatMul(
         aGpu, bGpu, cGpu, gtGpu,
         matMulCudaWarpTilingExactFitLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
         "GPU Warp Tiling Exact Fit", gpuResolveBankConflictsExactFitTime, "GPU Resolve Bank Conflicts Exact Fit"
     );
 
+    float gpuSubWarpTilingExactFitTime = Benchmark::benchmarkMatMul(
+        aGpu, bGpu, cGpu, gtGpu,
+        matMulCudaSubWarpTilingExactFitLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
+        "GPU Sub Warp Tiling Exact Fit", gpuResolveBankConflictsExactFitTime, "GPU Resolve Bank Conflicts Exact Fit"
+    );
+
+
     matMulCublasInit();
     Benchmark::benchmarkMatMul(
         aGpu, bGpu, cGpu, gtGpu,
-        matMulCublasLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
-        "cuBLAS SGEMM", gpuWarpTilingExactFitTime, "GPU Warp Tiling Exact Fit"
+        matMulCublasLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA, "cuBLAS SGEMM",
+        gpuWarpTilingExactFitTime, "GPU Warp Tiling Exact Fit"
     );
     matMulCublasShutdown();
 

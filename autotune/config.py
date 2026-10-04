@@ -23,6 +23,9 @@ class Config:
     warp_tile_m: int
     warp_tile_n: int
 
+    warp_subtiles_per_warp_tile_m: int
+    warp_subtiles_per_warp_tile_n: int
+
     acc_loop_unroll: int
 
 
@@ -33,12 +36,21 @@ class Config:
 
     @property
     def tile_m(self) -> int:
-        return self.block_y * self.rows_per_thread_tile
+        return self.block_y * self.warp_subtiles_per_warp_tile_m * self.rows_per_thread_tile
 
 
     @property
     def tile_n(self) -> int:
-        return self.block_x * self.cols_per_thread_tile
+        return self.block_x * self.warp_subtiles_per_warp_tile_n * self.cols_per_thread_tile
+
+
+    @property
+    def warp_subtile_m(self) -> int:
+        return self.warp_tile_m // self.warp_subtiles_per_warp_tile_m
+
+    @property
+    def warp_subtile_n(self) -> int:
+        return self.warp_tile_n // self.warp_subtiles_per_warp_tile_n
 
 
     @property
@@ -47,8 +59,8 @@ class Config:
 
 
     @property
-    def thread_tiles_per_warp_n(self) -> int:
-        return self.warp_tile_n // self.cols_per_thread_tile
+    def thread_tiles_per_warp_subtile_n(self) -> int:
+        return self.warp_subtile_n // self.cols_per_thread_tile
 
 
     @property
@@ -71,6 +83,8 @@ class Config:
         return (
             f"bx_{self.block_x}_"
             f"by_{self.block_y}_"
+            f"wsm_{self.warp_subtiles_per_warp_tile_m}_"
+            f"wsn_{self.warp_subtiles_per_warp_tile_n}_"
             f"ttm_{self.rows_per_thread_tile}_"
             f"ttn_{self.cols_per_thread_tile}_"
             f"btk_{self.tile_k}_"

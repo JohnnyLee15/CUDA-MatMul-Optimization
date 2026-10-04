@@ -13,15 +13,20 @@ from .constants import THREADS_PER_WARP, OBJECTS_DIR, EXECUTABLES_DIR
 
 NUM_COMPILE_WORKERS = 16
 
+RESET_PROGRESS_LINE = "\r\033[2K"
+
 BLOCK_X_SWEEP = (1, 2, 4, 8, 16, 32, 64, 128)
 BLOCK_Y_SWEEP = (1, 2, 4, 8, 16, 32, 64, 128)
 
 ROWS_PER_THREAD_TILE_SWEEP = (4, 8, 16)
 COLS_PER_THREAD_TILE_SWEEP = (4, 8, 16)
 
+WARP_SUBTILES_PER_WARP_TILE_M_SWEEP = (1, 2, 4)
+WARP_SUBTILES_PER_WARP_TILE_N_SWEEP = (1, 2, 4)
+
 TILE_K_SWEEP = (4, 8, 16, 32, 64, 128)
 ACC_LOOP_UNROLL_SWEEP = (1, 2, 4, 8, 16, 32, 64)
-THREAD_TILES_PER_WARP_N_SWEEP = (1, 2, 4, 8, 16, 32)
+THREAD_TILES_PER_WARP_SUBTILE_N_SWEEP = (1, 2, 4, 8, 16, 32)
 
 
 def _cleanup_generated_files(keep_top_k_kernels: int, results: list[tuple[str, float, Path]]) -> None:
@@ -39,27 +44,33 @@ def _get_valid_configs(matrix_sizes: MatrixSizes) -> list[Config]:
     valid_configs = []
     for (
         block_x, block_y,
-        rows_per_thread, cols_per_thread,
+        rows_per_thread_tile, cols_per_thread_tile,
+        warp_subtiles_per_warp_tile_m, warp_subtiles_per_warp_tile_n,
         tile_k,
         acc_loop_unroll,
-        thread_tiles_per_warp_n,
+        thread_tiles_per_warp_subtile_n,
     ) in product(
         BLOCK_X_SWEEP,
         BLOCK_Y_SWEEP,
         ROWS_PER_THREAD_TILE_SWEEP,
         COLS_PER_THREAD_TILE_SWEEP,
+        WARP_SUBTILES_PER_WARP_TILE_M_SWEEP,
+        WARP_SUBTILES_PER_WARP_TILE_N_SWEEP,
         TILE_K_SWEEP,
         ACC_LOOP_UNROLL_SWEEP,
-        THREAD_TILES_PER_WARP_N_SWEEP,
+        THREAD_TILES_PER_WARP_SUBTILE_N_SWEEP,
     ):
-        warp_tile_n = thread_tiles_per_warp_n * cols_per_thread
-        warp_tile_m = rows_per_thread * (THREADS_PER_WARP // thread_tiles_per_warp_n)
+        warp_subtile_n = thread_tiles_per_warp_subtile_n * cols_per_thread_tile
+        warp_subtile_m = (THREADS_PER_WARP // thread_tiles_per_warp_subtile_n) * rows_per_thread_tile
+        warp_tile_n = warp_subtile_n * warp_subtiles_per_warp_tile_n
+        warp_tile_m = warp_subtile_m * warp_subtiles_per_warp_tile_m
 
         config = Config(
             block_x, block_y,
-            rows_per_thread, cols_per_thread,
+            rows_per_thread_tile, cols_per_thread_tile,
             tile_k,
-            warp_tile_m,warp_tile_n,
+            warp_tile_m ,warp_tile_n,
+            warp_subtiles_per_warp_tile_m, warp_subtiles_per_warp_tile_n,
             acc_loop_unroll
         )
 
@@ -94,12 +105,13 @@ def _build_candidates(configs: list[Config]) -> list[tuple[Config, Path, Path]]:
                 candidate = future.result()
                 candidates.append(candidate)
                 config, _, _ = candidate
-                print(f"Built {i}/{len(configs)}: {config.name}", flush=True,)
+                print(f"{RESET_PROGRESS_LINE}Built {i}/{len(configs)}: {config.name}", flush=True, end="")
         except BaseException:
             for future in futures:
                 future.cancel()
             raise
 
+    print()
     return candidates
 
 
@@ -119,16 +131,17 @@ def run_sweep(matrix_sizes: MatrixSizes, keep_top_k_kernels: int) -> list[tuple[
     built_candidates = _build_candidates(configs)
 
     for i, (config, kernel_path, executable_path) in enumerate(built_candidates, start=1):
-        print(f"Benchmarking {i}/{len(configs)}: {config.name}", flush=True)
+        print(f"{RESET_PROGRESS_LINE}Benchmarking {i}/{len(configs)}: {config.name}", flush=True, end="")
         time = run_benchmark(executable_path, matrix_sizes.m, matrix_sizes.n, matrix_sizes.k)
 
         if time is None:
-            print(f"Skipping {config.name}: insufficient kernel resources.", flush=True)
+            print(f"{RESET_PROGRESS_LINE}Skipping {config.name}: insufficient kernel resources.", flush=True, end="")
             kernel_path.unlink(missing_ok=True)
             continue
 
         benchmark_results.append((config.name, time, kernel_path))
 
+    print()
     benchmark_results = sorted(benchmark_results, key=lambda x: x[1])
     _cleanup_generated_files(keep_top_k_kernels, benchmark_results)
     return benchmark_results
