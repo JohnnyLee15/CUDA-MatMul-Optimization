@@ -15,6 +15,11 @@ We begin with CUDA indexing and warps, then move through coalescing, shared memo
 - [Optimization 5: Vectorization](#optimization-5-vectorization)
 - [Optimization 6: Resolving Bank Conflicts](#optimization-6-resolving-bank-conflicts)
 - [Optimization 7: Warp Tiling](#optimization-7-warp-tiling)
+- [Optimization 8: Warp Subtiling](#optimization-8-warp-subtiling)
+- [Optimization 9: Autotuning](#optimization-9-autotuning)
+- [Optimization 10: Double Buffering and Asynchronous Copies](#optimization-10-double-buffering-and-asynchronous-copies)
+- [Optimization 11: Tensor Cores](#optimization-11-tensor-cores)
+- [Benchmarks](#benchmarks)
 
 ## Calculating Indexes
 
@@ -3195,6 +3200,8 @@ __global__ void matMulCudaWarpTilingExactFitKernel (
 }
 ```
 
+The kernel shown above is the exact-fit version. A general version is also included in the repository for matrix dimensions that are not exact multiples of the tile dimensions.
+
 `WARP_TILE_M = 128` and `WARP_TILE_N = 16` control the size of the output tile computed by each warp. Since each thread still computes an `8 x 8` output tile, a `128 x 16` warp tile contains
 
 $$
@@ -3405,3 +3412,653 @@ Despite these additional conflicts, the kernel was still faster overall. This is
 This is an important result: minimizing bank conflicts does not necessarily minimize the total execution time of the kernel. Warp shape introduces several interacting tradeoffs, so the fastest configuration cannot always be determined by optimizing a single metric in isolation.
 
 Since the warp tile shape is now an explicit parameter, the next step is to autotune the kernel by testing different combinations of block tile, warp tile, thread tile, and `TILE_K` sizes to determine which configuration performs best on the GPU.
+
+The next step is to extend this tiling hierarchy one level further by subdividing easch warp tile into smaller warp subtiles.
+
+## Optimization 8: Warp Subtiling
+
+### What is Warp Subtiling?
+
+Warp subtiling is an extension of warp tiling. Instead of treating the entire warp tile as a single unit, we subdivide it into several smaller subtiles and map the threads within the warp across each of those subtiles.
+
+For example, in the previous kernel we chose `WARP_TILE_M = 128` and `WARP_TILE_N = 16`. We also had `BLOCK_X = BLOCK_Y = 16` and `ROWS_PER_THREAD = COLS_PER_THREAD = 8`, giving
+
+$$
+TILE\_M = TILE\_N = 16 \cdot 8 = 128.
+$$
+
+Since each block contains
+
+$$
+\dfrac{\text{BLOCK\_X} \cdot \text{BLOCK\_Y}}
+{\text{THREADS\_PER\_WARP}} =
+\dfrac{256}{32} =
+8
+$$
+
+warps, the `128 x 128` block tile is divided into eight `128 x 16` warp tiles:
+
+```text
+Each Wi = W0, W1, ..., W7 is one 128 x 16 warp tile.
+
+ warpX:  0    1    2    3    4    5    6    7
+warpY: +----+----+----+----+----+----+----+----+
+   0   | W0 | W1 | W2 | W3 | W4 | W5 | W6 | W7 |
+       +----+----+----+----+----+----+----+----+
+```
+
+Within each warp tile, the 32 threads are arranged as 16 thread tile rows and 2 thread tile columns:
+
+```text
+Each Ti = T0, T1, ..., T31 is one 8 x 8 thread tile.
+
+ warpThreadX:  0    1
+warpThreadY: +----+----+
+          0  | T0 | T1 |
+             +----+----+
+          1  | T2 | T3 |
+             +----+----+
+          2  | T4 | T5 |
+             +----+----+
+          3  | T6 | T7 |
+             +----+----+
+          4  | T8 | T9 |
+             +----+----+
+          5  |T10 |T11 |
+             +----+----+
+          6  |T12 |T13 |
+             +----+----+
+          7  |T14 |T15 |
+             +----+----+
+          8  |T16 |T17 |
+             +----+----+
+          9  |T18 |T19 |
+             +----+----+
+         10  |T20 |T21 |
+             +----+----+
+         11  |T22 |T23 |
+             +----+----+
+         12  |T24 |T25 |
+             +----+----+
+         13  |T26 |T27 |
+             +----+----+
+         14  |T28 |T29 |
+             +----+----+
+         15  |T30 |T31 |
+             +----+----+
+```
+
+In this configuration, each thread computes one `8 x 8` thread tile, and the 32 thread tiles together form the complete `128 x 16` warp tile.
+
+Instead of assigning each thread one large tile within the warp tile, we can subdivide the warp tile into smaller regions and have the full warp cooperate on each region. This is the idea behind warp subtiling.
+
+The arrangement of warp tiles within the block does not change:
+
+```text
+Each Wi = W0, W1, ..., W7 is one 128 x 16 warp tile.
+
+ warpX:  0    1    2    3    4    5    6    7
+warpY: +----+----+----+----+----+----+----+----+
+   0   | W0 | W1 | W2 | W3 | W4 | W5 | W6 | W7 |
+       +----+----+----+----+----+----+----+----+
+```
+
+Now, let's subdivide each warp tile into a `2 x 2` grid of subtiles. At each step of the dot product, all 32 threads update their assigned thread tile in every subtile. Therefore, each subtile must contain exactly 32 thread tiles.
+
+Our warp tile computes `128 x 16` output elements. Dividing it into two subtiles along both the $x$ and $y$ dimensions gives each subtile a size of
+
+$$
+\dfrac{\text{WARP\_TILE\_M}}{\text{NUM\_SUBTILES\_Y}}
+\times
+\dfrac{\text{WARP\_TILE\_N}}{\text{NUM\_SUBTILES\_X}} =
+\dfrac{128}{2}
+\times
+\dfrac{16}{2} =
+64 \times 8
+$$
+
+output elements.
+
+If we kept `ROWS_PER_THREAD = COLS_PER_THREAD = 8`, each thread would still compute an `8 x 8` output tile. However, only
+
+$$
+\dfrac{\text{SUBTILE\_M}}{\text{ROWS\_PER\_THREAD}}
+\cdot
+\dfrac{\text{SUBTILE\_N}}{\text{COLS\_PER\_THREAD}} =
+\dfrac{64}{8}
+\cdot
+\dfrac{8}{8} =
+8
+$$
+
+such thread tiles would fit inside a `64 x 8` subtile. This would only provide work for 8 of the 32 threads in the warp.
+
+Instead, we reduce the thread tile size to `4 x 4` by setting
+
+```cpp
+ROWS_PER_THREAD = 4;
+COLS_PER_THREAD = 4;
+```
+
+Now each `64 x 8` subtile contains
+
+$$
+\dfrac{\text{SUBTILE\_M}}{\text{ROWS\_PER\_THREAD}}
+\cdot
+\dfrac{\text{SUBTILE\_N}}{\text{COLS\_PER\_THREAD}} =
+\dfrac{64}{4}
+\cdot
+\dfrac{8}{4} =
+32
+$$
+
+thread tiles, giving exactly one `4 x 4` thread tile to each of the 32 threads in the warp.
+
+Thus, each `Wi` from the previous diagram is divided as follows:
+
+```text
+Each Si = S0, S1, S2, S3 is one 64 x 8 subtile.
+
+ subTileX:  0    1
+subTileY: +----+----+
+    0     | S0 | S1 |
+          +----+----+
+    1     | S2 | S3 |
+          +----+----+
+```
+
+Within each warp subtile, the 32 threads are arranged as 16 thread tile rows and 2 thread tile columns:
+
+```text
+Each Ti = T0, T1, ..., T31 is one 4 x 4 thread tile.
+
+ warpThreadX:  0    1
+warpThreadY: +----+----+
+          0  | T0 | T1 |
+             +----+----+
+          1  | T2 | T3 |
+             +----+----+
+          2  | T4 | T5 |
+             +----+----+
+          3  | T6 | T7 |
+             +----+----+
+          4  | T8 | T9 |
+             +----+----+
+          5  |T10 |T11 |
+             +----+----+
+          6  |T12 |T13 |
+             +----+----+
+          7  |T14 |T15 |
+             +----+----+
+          8  |T16 |T17 |
+             +----+----+
+          9  |T18 |T19 |
+             +----+----+
+         10  |T20 |T21 |
+             +----+----+
+         11  |T22 |T23 |
+             +----+----+
+         12  |T24 |T25 |
+             +----+----+
+         13  |T26 |T27 |
+             +----+----+
+         14  |T28 |T29 |
+             +----+----+
+         15  |T30 |T31 |
+             +----+----+
+```
+
+Like warp tiling, warp subtiling does not provide an obvious benefit on its own. The warp still computes the same `128 x 16` output tile, and each thread still computes the same total number of output elements. What changes is how that work is divided within the warp. By splitting the warp tile into smaller subtiles, we change how the threads access `aTile` and `bTile` during the accumulation phase, which can affect shared memory broadcasts, bank conflicts, and the overall cost of supplying operands to the warp.
+
+### The Kernel
+
+The layout described above is the one used in the warp subtiled kernel. Now that we understand how the warp tile is divided into subtiles, we can look at the changes required to implement this mapping in the kernel.
+
+Here, `ROWS_PER_THREAD_TILE` and `COLS_PER_THREAD_TILE` replace `ROWS_PER_THREAD` and `COLS_PER_THREAD`, emphasizing that these dimensions describe a thread’s tile within one warp subtile.
+
+```cuda
+constexpr uint32_t BLOCK_X = 16;
+constexpr uint32_t BLOCK_Y = 16;
+constexpr uint32_t NUM_THREADS = BLOCK_X * BLOCK_Y;
+
+constexpr uint32_t ROWS_PER_THREAD_TILE = 4;
+constexpr uint32_t COLS_PER_THREAD_TILE = 4;
+
+constexpr uint32_t TILE_M = 128;
+constexpr uint32_t TILE_N = 128;
+constexpr uint32_t TILE_K = 32;
+
+constexpr uint32_t WARP_TILE_M = 128;
+constexpr uint32_t WARP_TILE_N = 16;
+
+constexpr uint32_t WARP_SUBTILES_PER_WARP_TILE_M = 2;
+constexpr uint32_t WARP_SUBTILES_PER_WARP_TILE_N = 2;
+
+constexpr uint32_t WARP_SUBTILE_M = WARP_TILE_M / WARP_SUBTILES_PER_WARP_TILE_M;
+constexpr uint32_t WARP_SUBTILE_N = WARP_TILE_N / WARP_SUBTILES_PER_WARP_TILE_N;
+
+constexpr uint32_t WARP_TILES_PER_BLOCK_N = TILE_N / WARP_TILE_N;
+constexpr uint32_t THREAD_TILES_PER_WARP_SUBTILE_N = WARP_SUBTILE_N / COLS_PER_THREAD_TILE;
+
+constexpr uint32_t FLOATS_PER_FLOAT4 = 4;
+constexpr uint32_t FLOATS_PER_LOAD_PASS = NUM_THREADS * FLOATS_PER_FLOAT4;
+
+constexpr uint32_t A_TILE_ROW_STRIDE = FLOATS_PER_LOAD_PASS / TILE_K;
+constexpr uint32_t B_TILE_ROW_STRIDE = FLOATS_PER_LOAD_PASS / TILE_N;
+
+constexpr uint32_t BYTES_PER_FLOAT4 = 16;
+
+constexpr uint32_t FLOAT4_OFFSET_MASK = FLOATS_PER_FLOAT4 - 1u;
+constexpr uint32_t TILE_M_WRAP_MASK = TILE_M - 1u;
+constexpr uint32_t COLS_PER_THREAD_SHIFT = 3;
+
+constexpr uint32_t THREADS_PER_WARP = 32;
+
+
+struct TileCoord{
+    uint32_t x;
+    uint32_t y;
+};
+
+
+__device__ __forceinline__ TileCoord aTilePhysicalCoord(uint32_t logicalX, uint32_t logicalY) {
+    const uint32_t shift = logicalX & ~FLOAT4_OFFSET_MASK;
+    return TileCoord{(logicalY + shift) & TILE_M_WRAP_MASK, logicalX};
+}
+
+
+__device__ __forceinline__ TileCoord bTilePhysicalCoord(uint32_t logicalX, uint32_t logicalY) {
+    const uint32_t halfSwapMask = (logicalX >> COLS_PER_THREAD_SHIFT) & FLOATS_PER_FLOAT4;
+    return TileCoord{logicalX ^ halfSwapMask, logicalY};
+}
+
+
+__global__ void matMulCudaWarpSubtilingExactFitKernel (
+    const float* __restrict__ a,
+    const float* __restrict__ b,
+    float* __restrict__ c,
+    uint32_t m,
+    uint32_t n,
+    uint32_t k
+) {
+    __shared__ __align__(BYTES_PER_FLOAT4) float aTile[TILE_K][TILE_M];
+    __shared__ __align__(BYTES_PER_FLOAT4) float bTile[TILE_K][TILE_N];
+
+    const uint32_t ty = threadIdx.y;
+    const uint32_t tx = threadIdx.x;
+    const uint32_t tid = ty * BLOCK_X + tx;
+    const uint32_t threadStartIdx = tid * FLOATS_PER_FLOAT4;
+
+    const uint32_t warpId = tid / THREADS_PER_WARP;
+    const uint32_t warpThreadId = tid % THREADS_PER_WARP;
+
+    const uint32_t warpY = warpId / WARP_TILES_PER_BLOCK_N;
+    const uint32_t warpX = warpId % WARP_TILES_PER_BLOCK_N;
+
+    const uint32_t warpThreadY = warpThreadId / THREAD_TILES_PER_WARP_SUBTILE_N;
+    const uint32_t warpThreadX = warpThreadId % THREAD_TILES_PER_WARP_SUBTILE_N;
+
+    const uint32_t threadTileStartYInBlock = warpY * WARP_TILE_M + warpThreadY * ROWS_PER_THREAD_TILE;
+    const uint32_t threadTileStartXInBlock = warpX * WARP_TILE_N + warpThreadX * COLS_PER_THREAD_TILE;
+
+    const uint32_t aTileYStart = threadStartIdx / TILE_K;
+    const uint32_t bTileYStart = threadStartIdx / TILE_N;
+
+    const uint32_t aTileX = threadStartIdx % TILE_K;
+    const uint32_t bTileX = threadStartIdx % TILE_N;
+
+    const uint32_t ayBlockStart = blockIdx.y * TILE_M;
+    const uint32_t bxBlockStart = blockIdx.x * TILE_N;
+
+    const uint32_t cyStart = ayBlockStart + threadTileStartYInBlock;
+    const uint32_t cxStart = bxBlockStart + threadTileStartXInBlock;
+
+    const uint32_t bTilePhysicalX = bTilePhysicalCoord(bTileX, 0).x;
+
+    __align__(BYTES_PER_FLOAT4) float aReg[WARP_SUBTILES_PER_WARP_TILE_M][ROWS_PER_THREAD_TILE];
+    __align__(BYTES_PER_FLOAT4) float bReg[WARP_SUBTILES_PER_WARP_TILE_N][COLS_PER_THREAD_TILE];
+    __align__(BYTES_PER_FLOAT4) float acc[WARP_SUBTILES_PER_WARP_TILE_M]
+                                         [WARP_SUBTILES_PER_WARP_TILE_N]
+                                         [ROWS_PER_THREAD_TILE][COLS_PER_THREAD_TILE] = {0.0f};
+
+    for (uint32_t tileStart = 0; tileStart < k; tileStart += TILE_K) {
+
+        #pragma unroll
+        for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_M; tileRowOffset += A_TILE_ROW_STRIDE) {
+            const uint32_t aTileY = tileRowOffset + aTileYStart;
+            const TileCoord aTileCoords = aTilePhysicalCoord(aTileX, aTileY);
+            const uint32_t ay = ayBlockStart + aTileY;
+            const uint32_t ax = tileStart + aTileX;
+
+            const float4 toLoad = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
+            aTile[aTileCoords.y + 0][aTileCoords.x] = toLoad.x;
+            aTile[aTileCoords.y + 1][aTileCoords.x] = toLoad.y;
+            aTile[aTileCoords.y + 2][aTileCoords.x] = toLoad.z;
+            aTile[aTileCoords.y + 3][aTileCoords.x] = toLoad.w;
+        }
+
+        #pragma unroll
+        for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_K; tileRowOffset += B_TILE_ROW_STRIDE) {
+            const uint32_t bTileY = tileRowOffset + bTileYStart;
+            const uint32_t by = tileStart + bTileY;
+            const uint32_t bx = bxBlockStart + bTileX;
+
+            *reinterpret_cast<float4*>(&bTile[bTileY][bTilePhysicalX]) = *reinterpret_cast<const float4*>(&b[by * n + bx]);
+        }
+
+        __syncthreads();
+
+        #pragma unroll 16
+        for (uint32_t dotIdx = 0; dotIdx < TILE_K; dotIdx++) {
+
+            #pragma unroll
+            for (uint32_t subtileY = 0; subtileY < WARP_SUBTILES_PER_WARP_TILE_M; subtileY++) {
+                #pragma unroll
+                for (uint32_t i = 0; i < ROWS_PER_THREAD_TILE; i += FLOATS_PER_FLOAT4) {
+                    const uint32_t aTileLogicalY = threadTileStartYInBlock + subtileY * WARP_SUBTILE_M + i;
+                    const TileCoord aTileCoords = aTilePhysicalCoord(dotIdx, aTileLogicalY);
+                    *reinterpret_cast<float4*>(&aReg[subtileY][i]) = *reinterpret_cast<const float4*>(&aTile[aTileCoords.y][aTileCoords.x]);
+                }
+            }
+
+            #pragma unroll
+            for (uint32_t subtileX = 0; subtileX < WARP_SUBTILES_PER_WARP_TILE_N; subtileX++) {
+                #pragma unroll
+                for (uint32_t j = 0; j < COLS_PER_THREAD_TILE; j += FLOATS_PER_FLOAT4) {
+                    const uint32_t bTileLogicalX = threadTileStartXInBlock + subtileX * WARP_SUBTILE_N + j;
+                    const TileCoord bTileCoords = bTilePhysicalCoord(bTileLogicalX, dotIdx);
+                    *reinterpret_cast<float4*>(&bReg[subtileX][j]) = *reinterpret_cast<const float4*>(&bTile[bTileCoords.y][bTileCoords.x]);
+                }
+            }
+
+            #pragma unroll
+            for (uint32_t subtileY = 0; subtileY < WARP_SUBTILES_PER_WARP_TILE_M; subtileY++) {
+                #pragma unroll
+                for (uint32_t subtileX = 0; subtileX < WARP_SUBTILES_PER_WARP_TILE_N; subtileX++) {
+                    #pragma unroll
+                    for (uint32_t i = 0; i < ROWS_PER_THREAD_TILE; i++) {
+                        #pragma unroll
+                        for (uint32_t j = 0; j < COLS_PER_THREAD_TILE; j++) {
+                            acc[subtileY][subtileX][i][j] += aReg[subtileY][i] * bReg[subtileX][j];
+                        }
+                    }
+                }
+            }
+        }
+
+        __syncthreads();
+    }
+
+    #pragma unroll
+    for (uint32_t subtileY = 0; subtileY < WARP_SUBTILES_PER_WARP_TILE_M; subtileY++) {
+        #pragma unroll
+        for (uint32_t subtileX = 0; subtileX < WARP_SUBTILES_PER_WARP_TILE_N; subtileX++) {
+            #pragma unroll
+            for (uint32_t i = 0; i < ROWS_PER_THREAD_TILE; i++) {
+                const uint32_t cy = cyStart + subtileY * WARP_SUBTILE_M + i;
+                #pragma unroll
+                for (uint32_t j = 0; j < COLS_PER_THREAD_TILE; j += FLOATS_PER_FLOAT4) {
+                    const uint32_t cx = cxStart + subtileX * WARP_SUBTILE_N + j;
+                    *reinterpret_cast<float4*>(&c[cy * n + cx]) = *reinterpret_cast<float4*>(&acc[subtileY][subtileX][i][j]);
+                }
+            }
+        }
+    }
+}
+```
+
+The kernel shown above is the exact-fit version. A general version is also included in the repository for matrix dimensions that are not exact multiples of the tile dimensions.
+
+First, it is important to note that loading data into `aTile` and `bTile` is still a separate process from the dot product accumulation step and is not affected by warp subtiling.
+
+Next, let's look at the new constants:
+
+```cuda
+constexpr uint32_t WARP_SUBTILES_PER_WARP_TILE_M = 2;
+constexpr uint32_t WARP_SUBTILES_PER_WARP_TILE_N = 2;
+
+constexpr uint32_t WARP_SUBTILE_M = WARP_TILE_M / WARP_SUBTILES_PER_WARP_TILE_M;
+constexpr uint32_t WARP_SUBTILE_N = WARP_TILE_N / WARP_SUBTILES_PER_WARP_TILE_N;
+
+constexpr uint32_t WARP_TILES_PER_BLOCK_N = TILE_N / WARP_TILE_N;
+constexpr uint32_t THREAD_TILES_PER_WARP_SUBTILE_N = WARP_SUBTILE_N / COLS_PER_THREAD_TILE;
+```
+
+Starting with
+
+```cuda
+constexpr uint32_t WARP_SUBTILES_PER_WARP_TILE_M = 2;
+constexpr uint32_t WARP_SUBTILES_PER_WARP_TILE_N = 2;
+```
+
+these specify the number of subtiles within each warp tile along the $M$ ($y$) and $N$ ($x$) dimensions, respectively. These are the same `2 x 2` subdivisions shown in the previous set of diagrams.
+
+Next,
+
+```cuda
+constexpr uint32_t WARP_SUBTILE_M = WARP_TILE_M / WARP_SUBTILES_PER_WARP_TILE_M;
+constexpr uint32_t WARP_SUBTILE_N = WARP_TILE_N / WARP_SUBTILES_PER_WARP_TILE_N;
+```
+
+define the size of each warp subtile. For our `128 x 16` warp tile,
+
+$$
+\text{WARP\_SUBTILE\_M} =
+\frac{\text{WARP\_TILE\_M}}{\text{WARP\_SUBTILES\_PER\_WARP\_TILE\_M}} =
+\frac{128}{2} =
+64
+$$
+
+and
+
+$$
+\text{WARP\_SUBTILE\_N} =
+\frac{\text{WARP\_TILE\_N}}{\text{WARP\_SUBTILES\_PER\_WARP\_TILE\_N}} =
+\frac{16}{2} =
+8.
+$$
+
+Therefore, each warp subtile computes a `64 x 8` region of the output.
+
+Finally,
+
+```cuda
+constexpr uint32_t WARP_TILES_PER_BLOCK_N = TILE_N / WARP_TILE_N;
+constexpr uint32_t THREAD_TILES_PER_WARP_SUBTILE_N = WARP_SUBTILE_N / COLS_PER_THREAD_TILE;
+```
+
+describe the horizontal layout at two different levels of the tiling hierarchy.
+
+The number of warp tile columns within the block output tile is
+
+$$
+\text{WARP\_TILES\_PER\_BLOCK\_N} =
+\frac{\text{TILE\_N}}{\text{WARP\_TILE\_N}} =
+\frac{128}{16} =
+8.
+$$
+
+Similarly, the number of thread tile columns within each warp subtile is
+
+$$
+\text{THREAD\_TILES\_PER\_WARP\_SUBTILE\_N} =
+\frac{\text{WARP\_SUBTILE\_N}}{\text{COLS\_PER\_THREAD\_TILE}} =
+\frac{8}{4} =
+2.
+$$
+
+Therefore, `WARP_TILES_PER_BLOCK_N = 8` and `THREAD_TILES_PER_WARP_SUBTILE_N = 2`.
+
+Next, you'll see that the calculations for `warpThreadX` and `warpThreadY` have changed. In the warp tiled kernel, these represented the coordinates of the thread tile within the warp tile. In the warp subtiled kernel, they instead represent the coordinates of the thread tile within a single warp subtile:
+
+```cuda
+const uint32_t warpThreadY = warpThreadId / THREAD_TILES_PER_WARP_SUBTILE_N;
+const uint32_t warpThreadX = warpThreadId % THREAD_TILES_PER_WARP_SUBTILE_N;
+```
+
+Since `THREAD_TILES_PER_WARP_SUBTILE_N = 2` and $\text{warpThreadId} \in \{0,1,\dots,31\}$, we get $\text{warpThreadY} \in \{0,1,\dots,15\}$ and $\text{warpThreadX} \in \{0,1\}$. Thus, the 32 threads are arranged as 16 thread tile rows and 2 thread tile columns within each warp subtile.
+
+Next, you'll see we have:
+
+```cuda
+__align__(BYTES_PER_FLOAT4) float aReg[WARP_SUBTILES_PER_WARP_TILE_M][ROWS_PER_THREAD_TILE];
+__align__(BYTES_PER_FLOAT4) float bReg[WARP_SUBTILES_PER_WARP_TILE_N][COLS_PER_THREAD_TILE];
+__align__(BYTES_PER_FLOAT4) float acc[WARP_SUBTILES_PER_WARP_TILE_M]
+                                     [WARP_SUBTILES_PER_WARP_TILE_N]
+                                     [ROWS_PER_THREAD_TILE][COLS_PER_THREAD_TILE] = {0.0f};
+```
+
+These arrays now include the warp subtile dimensions because each thread contributes to every subtile within the warp tile. Since the warp tile is divided into two subtiles along the $M$ dimension and two along the $N$ dimension, each thread needs separate register storage for the values associated with each subtile.
+
+`aReg` stores one set of `ROWS_PER_THREAD_TILE` values for each warp subtile row, while `bReg` stores one set of `COLS_PER_THREAD_TILE` values for each warp subtile column. The accumulator therefore needs both dimensions, since each combination of warp subtile row and column corresponds to a different output subtile.
+
+Next, we have the dot product accumulation loop. First, we'll look at how we load values from `aTile` into `aReg`:
+
+```cuda
+#pragma unroll
+for (uint32_t subtileY = 0; subtileY < WARP_SUBTILES_PER_WARP_TILE_M; subtileY++) {
+    #pragma unroll
+    for (uint32_t i = 0; i < ROWS_PER_THREAD_TILE; i += FLOATS_PER_FLOAT4) {
+        const uint32_t aTileLogicalY = threadTileStartYInBlock + subtileY * WARP_SUBTILE_M + i;
+        const TileCoord aTileCoords = aTilePhysicalCoord(dotIdx, aTileLogicalY);
+        *reinterpret_cast<float4*>(&aReg[subtileY][i]) = *reinterpret_cast<const float4*>(&aTile[aTileCoords.y][aTileCoords.x]);
+    }
+}
+```
+
+Recall that `threadTileStartYInBlock` is the starting $y$ coordinate of the thread tile relative to the entire block output tile. In the warp subtiled kernel, this gives the thread's local position within the first warp subtile row.
+
+To access the corresponding thread tile in each warp subtile row, we add
+
+```text
+subtileY * WARP_SUBTILE_M
+```
+
+to `threadTileStartYInBlock`.
+
+For `subtileY = 0`, this offset is `0`, so we access the thread tile in the first warp subtile row. For `subtileY = 1`, the offset is `WARP_SUBTILE_M = 64`, moving the same thread position down 64 rows into the second warp subtile row.
+
+The same logic applies in the $x$ direction when loading from `bTile`:
+
+```cuda
+#pragma unroll
+for (uint32_t subtileX = 0; subtileX < WARP_SUBTILES_PER_WARP_TILE_N; subtileX++) {
+    #pragma unroll
+    for (uint32_t j = 0; j < COLS_PER_THREAD_TILE; j += FLOATS_PER_FLOAT4) {
+        const uint32_t bTileLogicalX = threadTileStartXInBlock + subtileX * WARP_SUBTILE_N + j;
+        const TileCoord bTileCoords = bTilePhysicalCoord(bTileLogicalX, dotIdx);
+        *reinterpret_cast<float4*>(&bReg[subtileX][j]) = *reinterpret_cast<const float4*>(&bTile[bTileCoords.y][bTileCoords.x]);
+    }
+}
+```
+
+Here, `threadTileStartXInBlock` gives the thread tile's starting $x$ coordinate relative to the block output tile. Adding
+
+```text
+subtileX * WARP_SUBTILE_N
+```
+
+moves that same thread position between the two warp subtile columns. Since `WARP_SUBTILE_N = 8`, `subtileX = 0` accesses the first warp subtile column, while `subtileX = 1` moves eight columns to the right.
+
+Once the required values from each warp subtile row and column have been loaded into `aReg` and `bReg`, we accumulate every combination:
+
+```cuda
+#pragma unroll
+for (uint32_t subtileY = 0; subtileY < WARP_SUBTILES_PER_WARP_TILE_M; subtileY++) {
+    #pragma unroll
+    for (uint32_t subtileX = 0; subtileX < WARP_SUBTILES_PER_WARP_TILE_N; subtileX++) {
+        #pragma unroll
+        for (uint32_t i = 0; i < ROWS_PER_THREAD_TILE; i++) {
+            #pragma unroll
+            for (uint32_t j = 0; j < COLS_PER_THREAD_TILE; j++) {
+                acc[subtileY][subtileX][i][j] += aReg[subtileY][i] * bReg[subtileX][j];
+            }
+        }
+    }
+}
+```
+
+Each `(subtileY, subtileX)` pair selects one position in the `2 x 2` warp subtile grid. As a result, each thread accumulates one `4 x 4` thread tile in each of the four warp subtiles.
+
+Lastly, we need to write each accumulated thread tile back to its corresponding position in `C`:
+
+```cuda
+    #pragma unroll
+    for (uint32_t subtileY = 0; subtileY < WARP_SUBTILES_PER_WARP_TILE_M; subtileY++) {
+        #pragma unroll
+        for (uint32_t subtileX = 0; subtileX < WARP_SUBTILES_PER_WARP_TILE_N; subtileX++) {
+            #pragma unroll
+            for (uint32_t i = 0; i < ROWS_PER_THREAD_TILE; i++) {
+                const uint32_t cy = cyStart + subtileY * WARP_SUBTILE_M + i;
+                #pragma unroll
+                for (uint32_t j = 0; j < COLS_PER_THREAD_TILE; j += FLOATS_PER_FLOAT4) {
+                    const uint32_t cx = cxStart + subtileX * WARP_SUBTILE_N + j;
+                    *reinterpret_cast<float4*>(&c[cy * n + cx]) = *reinterpret_cast<float4*>(&acc[subtileY][subtileX][i][j]);
+                }
+            }
+        }
+    }
+```
+
+The indexing follows the same logic used during accumulation. `cyStart` and `cxStart` give the global starting coordinates of the thread tile in the first warp subtile. We then add `subtileY * WARP_SUBTILE_M` and `subtileX * WARP_SUBTILE_N` to move that thread tile to the corresponding position in each warp subtile.
+
+Thus, each `(subtileY, subtileX)` pair selects one of the four positions in the `2 x 2` warp subtile grid, and the thread writes its accumulated `4 x 4` output tile to the corresponding region of `C`.
+
+That is the main change introduced by warp subtiling. The block still computes a `128 x 128` output tile and each warp still computes a `128 x 16` output tile. However, instead of each thread computing one contiguous `8 x 8` region, the warp tile is divided into a `2 x 2` grid of `64 x 8` warp subtiles, with each thread computing one `4 x 4` thread tile within each of the four warp subtiles.
+
+Like warp tiling, warp subtiling does not provide an obvious performance benefit on its own. Instead, it changes how the threads within a warp access and reuse values from `aTile` and `bTile` during the accumulation phase. Different warp tile and warp subtile shapes can therefore produce different shared memory access patterns and execution costs.
+
+At this point, we have introduced several parameters that control how work is divided across the block, warp, warp subtile, and individual thread. Rather than choosing these values manually, the next step is to autotune the kernel by benchmarking different combinations and determining which configuration performs best on the GPU.
+
+## Optimization 9: Autotuning
+
+This section is conceptually much simpler than the others. We don't need to introduce any new GPU architecture concepts here. Autotuning refers to systematically testing different kernel configurations to determine which combination gives the best performance on a particular GPU. By configuration, we mean changing the values of constants that control how work is divided within the kernel, such as `TILE_M`, `TILE_N`, `TILE_K`, `WARP_TILE_M`, `WARP_TILE_N`, `ROWS_PER_THREAD`, `COLS_PER_THREAD`, `WARP_SUBTILES_PER_WARP_TILE_M`, `WARP_SUBTILES_PER_WARP_TILE_N`, and other controllable constants.
+
+An autotuner is a program that automates this process. It generates kernels using different combinations of these parameter values, compiles and benchmarks each valid configuration, and records which configuration produces the best performance.
+
+For this project, the autotuner searches over the constants that control the main levels of the kernel's tiling hierarchy and execution structure. The specific values tested were:
+
+```python
+BLOCK_X = (1, 2, 4, 8, 16, 32, 64, 128)
+BLOCK_Y = (1, 2, 4, 8, 16, 32, 64, 128)
+
+ROWS_PER_THREAD_TILE = (4, 8, 16)
+COLS_PER_THREAD_TILE = (4, 8, 16)
+
+WARP_SUBTILES_PER_WARP_TILE_M = (1, 2, 4)
+WARP_SUBTILES_PER_WARP_TILE_N = (1, 2, 4)
+
+TILE_K = (4, 8, 16, 32, 64, 128)
+
+ACC_LOOP_UNROLL = (1, 2, 4, 8, 16, 32, 64)
+
+THREAD_TILES_PER_WARP_SUBTILE_N = (1, 2, 4, 8, 16, 32)
+```
+
+Taken as a Cartesian product, these values represent `1,306,368` possible parameter combinations before any validity constraints are applied. However, most of these combinations cannot produce a valid kernel, so the autotuner filters the search space before attempting to compile anything.
+
+A configuration is only kept if it satisfies several constraints. The thread block must contain at most 1024 threads and its thread count must be a multiple of 32. The block, warp tile, warp subtile, and thread tile dimensions must divide evenly into one another, and each warp subtile must contain exactly 32 thread tiles so that every thread in the warp has work to perform. The configuration must also support the `float4` loading strategy used by the kernel, fit within the 48 KB static shared memory limit, use no more than 128 accumulators per thread to limit register pressure, and evenly divide the matrix dimensions since the autotuner benchmarks exact fit kernels.
+
+In addition, the layout must admit a conflict free shared memory mapping for both `aTile` and `bTile`. For each candidate layout, the autotuner searches for a valid logical-to-physical shared memory mapping that preserves the required access patterns while eliminating bank conflicts during the relevant shared memory reads and writes. If no such mapping can be found, that configuration is discarded.
+
+After applying these constraints, the original `1,306,368` combinations were reduced to `26,733` valid configurations for the sweep.
+
+Even this does not guarantee that every generated kernel can actually execute. Some hardware resource usage, particularly register allocation, is only known after the kernel has been compiled. Before benchmarking a candidate, the autotuner therefore uses CUDA's occupancy API to check whether at least one block of that kernel can be active on an SM. If CUDA reports that no block can be scheduled because the kernel requires too many resources, that configuration is skipped.
+
+These parameters were chosen because they control the major levels of the kernel's tiling hierarchy and execution structure. `BLOCK_X` and `BLOCK_Y` determine the number and arrangement of threads within each block. `ROWS_PER_THREAD_TILE` and `COLS_PER_THREAD_TILE` determine how much output each thread computes. `WARP_SUBTILES_PER_WARP_TILE_M`, `WARP_SUBTILES_PER_WARP_TILE_N`, and `THREAD_TILES_PER_WARP_SUBTILE_N` control how the work of each warp is divided into warp subtiles and how threads are arranged within them. `TILE_K` determines how much of the reduction dimension is processed during each shared memory tile iteration, while `ACC_LOOP_UNROLL` controls how aggressively the accumulation loop is unrolled.
+
+Changing any one of these values can affect thread-level work, register usage, shared memory usage, data reuse, occupancy, and shared memory access patterns. Because these effects interact with one another, the fastest configuration is difficult to predict manually, which is exactly where autotuning becomes useful.
+
+After benchmarking the remaining launchable configurations, the autotuner selects the configuration with the lowest execution time. The best-performing kernel found by the autotuner is included in the final benchmark results.
+
+## Optimization 10: Double Buffering and Asynchronous Copies
+
+Coming later.
+
+## Optimization 11: Tensor Cores
+
+Coming later.
+
+## Benchmarks
+
+Coming very soon.

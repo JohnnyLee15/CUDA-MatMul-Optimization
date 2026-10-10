@@ -5,6 +5,7 @@ from .constants import FLOATS_PER_FLOAT4, THREADS_PER_WARP
 MAX_BLOCK_SIZE = 1024
 BYTES_PER_FLOAT = 4
 MAX_STATIC_SHARED_MEMORY_BYTES_PER_BLOCK = 48 * 1024
+MAX_ACCUMULATORS_PER_THREAD = 128
 
 
 def _meets_basic_param_constraints(config: Config) -> bool:
@@ -95,11 +96,23 @@ def _fits_static_shared_memory_limit(layout: KernelLayout) -> bool:
     return shared_memory_bytes <= MAX_STATIC_SHARED_MEMORY_BYTES_PER_BLOCK
 
 
+def _fits_accumulator_limit(layout: KernelLayout) -> bool:
+    num_accumulators = (
+        layout.rows_per_thread_tile
+        * layout.cols_per_thread_tile
+        * layout.warp_subtiles_per_warp_tile_m
+        * layout.warp_subtiles_per_warp_tile_n
+    )
+
+    return num_accumulators <= MAX_ACCUMULATORS_PER_THREAD
+
+
 def is_config_valid(config: Config, matrix_sizes: MatrixSizes) -> bool:
     return (
         _meets_basic_param_constraints(config) and
         _has_valid_warp_and_subtile_layout(config.layout) and
         _has_valid_float4_tile_loading(config.layout) and
         _matrix_dimensions_fit_complete_tiles(config.layout, matrix_sizes) and
-        _fits_static_shared_memory_limit(config.layout)
+        _fits_static_shared_memory_limit(config.layout) and
+        _fits_accumulator_limit(config.layout)
     )

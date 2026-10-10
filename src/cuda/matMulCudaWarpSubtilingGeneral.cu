@@ -4,7 +4,7 @@
 
 #include <cuda_runtime.h>
 
-#include "cuda/matMulCudaSubWarpTilingExactFit.h"
+#include "cuda/matMulCudaWarpSubtilingGeneral.h"
 #include "matrix.h"
 #include "cudaCheck.h"
 
@@ -66,7 +66,7 @@ __device__ __forceinline__ TileCoord bTilePhysicalCoord(uint32_t logicalX, uint3
 }
 
 
-__global__ void matMulCudaSubWarpTilingExactFitKernel (
+__global__ void matMulCudaWarpSubtilingGeneralKernel (
     const float* __restrict__ a,
     const float* __restrict__ b,
     float* __restrict__ c,
@@ -123,11 +123,19 @@ __global__ void matMulCudaSubWarpTilingExactFitKernel (
             const uint32_t ay = ayBlockStart + aTileY;
             const uint32_t ax = tileStart + aTileX;
 
-            const float4 toLoad = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
-            aTile[aTileCoords.y + 0][aTileCoords.x] = toLoad.x;
-            aTile[aTileCoords.y + 1][aTileCoords.x] = toLoad.y;
-            aTile[aTileCoords.y + 2][aTileCoords.x] = toLoad.z;
-            aTile[aTileCoords.y + 3][aTileCoords.x] = toLoad.w;
+            if (ay < m && (ax + FLOATS_PER_FLOAT4) <= k && (ay * k + ax) % FLOATS_PER_FLOAT4 == 0)  {
+                const float4 toLoad = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
+                aTile[aTileCoords.y + 0][aTileCoords.x] = toLoad.x;
+                aTile[aTileCoords.y + 1][aTileCoords.x] = toLoad.y;
+                aTile[aTileCoords.y + 2][aTileCoords.x] = toLoad.z;
+                aTile[aTileCoords.y + 3][aTileCoords.x] = toLoad.w;
+
+            } else {
+                #pragma unroll
+                for (uint32_t p = 0; p < FLOATS_PER_FLOAT4; p++) {
+                    aTile[aTileCoords.y + p][aTileCoords.x] = (ay < m && (ax + p) < k) ? a[ay * k + (ax + p)] : 0.0f;
+                }
+            }
         }
 
         #pragma unroll
@@ -136,7 +144,14 @@ __global__ void matMulCudaSubWarpTilingExactFitKernel (
             const uint32_t by = tileStart + bTileY;
             const uint32_t bx = bxBlockStart + bTileX;
 
-            *reinterpret_cast<float4*>(&bTile[bTileY][bTilePhysicalX]) = *reinterpret_cast<const float4*>(&b[by * n + bx]);
+            if (by < k && (bx + FLOATS_PER_FLOAT4) <= n && (by * n + bx) % FLOATS_PER_FLOAT4 == 0)  {
+                *reinterpret_cast<float4*>(&bTile[bTileY][bTilePhysicalX]) = *reinterpret_cast<const float4*>(&b[by * n + bx]);
+            } else {
+                #pragma unroll
+                for (uint32_t p = 0; p < FLOATS_PER_FLOAT4; p++) {
+                    bTile[bTileY][bTilePhysicalX + p] = (by < k && (bx + p) < n) ? b[by * n + (bx + p)] : 0.0f;
+                }
+            }
         }
 
         __syncthreads();
@@ -192,7 +207,14 @@ __global__ void matMulCudaSubWarpTilingExactFitKernel (
                 #pragma unroll
                 for (uint32_t j = 0; j < COLS_PER_THREAD_TILE; j += FLOATS_PER_FLOAT4) {
                     const uint32_t cx = cxStart + subtileX * WARP_SUBTILE_N + j;
-                    *reinterpret_cast<float4*>(&c[cy * n + cx]) = *reinterpret_cast<float4*>(&acc[subtileY][subtileX][i][j]);
+                    if (cy < m && (cx + FLOATS_PER_FLOAT4) <= n && (cy * n + cx) % FLOATS_PER_FLOAT4 == 0) {
+                        *reinterpret_cast<float4*>(&c[cy * n + cx]) = *reinterpret_cast<float4*>(&acc[subtileY][subtileX][i][j]);
+                    } else {
+                        #pragma unroll
+                        for (uint32_t p = 0; p < FLOATS_PER_FLOAT4; p++) {
+                            if (cy < m && (cx + p) < n) c[cy * n + (cx + p)] = acc[subtileY][subtileX][i][j + p];
+                        }
+                    }
                 }
             }
         }
@@ -201,22 +223,17 @@ __global__ void matMulCudaSubWarpTilingExactFitKernel (
 }
 
 
-void matMulCudaSubWarpTilingExactFitLaunch(const Matrix &a, const Matrix &b, Matrix &c) {
+void matMulCudaWarpSubtilingGeneralLaunch(const Matrix &a, const Matrix &b, Matrix &c) {
     uint32_t m = c.nrows();
     uint32_t n = c.ncols();
     uint32_t k = a.ncols();
 
-    if (m % TILE_M != 0 || n % TILE_N != 0 || k % TILE_K != 0) {
-        std::fprintf(stderr, "Exact-fit kernel requires complete matrix tiles.\n");
-        std::abort();
-    }
-
-    uint32_t gridY = m / TILE_M;
-    uint32_t gridX = n /TILE_N;
+    uint32_t gridY = (m + TILE_M - 1) / TILE_M;
+    uint32_t gridX = (n + TILE_N - 1) / TILE_N;
     dim3 gridDim(gridX, gridY);
 
     dim3 blockDim(BLOCK_X, BLOCK_Y);
 
-    matMulCudaSubWarpTilingExactFitKernel<<<gridDim, blockDim>>>(a.data(), b.data(), c.data(), m, n, k);
+    matMulCudaWarpSubtilingGeneralKernel<<<gridDim, blockDim>>>(a.data(), b.data(), c.data(), m, n, k);
     CUDA_CHECK(cudaGetLastError());
 }

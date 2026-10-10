@@ -256,9 +256,12 @@ def _process_batch(
     for i, (kernel_spec, kernel_path, executable_path) in enumerate(built_candidates, start=1):
         config = kernel_spec.config
         print(
-            f"{RESET_PROGRESS_LINE}Benchmarking {batch_start_idx + i}/{num_kernel_candidates}: {config.name}",
-            flush=True,
+            f"{RESET_PROGRESS_LINE}"
+            f"Benchmarking — batch: {i}/{len(built_candidates)}, "
+            f"overall: {batch_start_idx + i}/{num_kernel_candidates}: "
+            f"{config.name}",
             end="",
+            flush=True,
         )
 
         time = run_benchmark(executable_path, matrix_sizes.m, matrix_sizes.n, matrix_sizes.k)
