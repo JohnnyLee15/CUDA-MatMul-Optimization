@@ -11,10 +11,16 @@ OBJECT_FILE_EXT = "o"
 RESULT_FILE_PREFIX = "result"
 
 ROOT_DIR = Path(__file__).parent.parent
+
 GENERATED_DIR = ROOT_DIR / "build" / "generated"
+
+KERNEL_OBJECTS_DIR = GENERATED_DIR / "kernel_objects"
+BENCHMARK_OBJECTS_DIR = GENERATED_DIR / "benchmark_objects"
+
 EXECUTABLES_DIR = GENERATED_DIR / "executables"
+
 KERNELS_DIR = GENERATED_DIR / "kernels"
-OBJECTS_DIR = GENERATED_DIR / "objects"
+
 RESULTS_DIR = GENERATED_DIR / "results"
 
 KERNEL_TEMPLATE_PATH = ROOT_DIR / "autotune" / "kernel.cu.in"

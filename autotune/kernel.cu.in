@@ -34,13 +34,20 @@ constexpr uint32_t THREAD_TILES_PER_WARP_SUBTILE_N = {{ THREAD_TILES_PER_WARP_SU
 constexpr uint32_t A_TILE_ROW_STRIDE = {{ A_TILE_ROW_STRIDE }};
 constexpr uint32_t B_TILE_ROW_STRIDE = {{ B_TILE_ROW_STRIDE }};
 
+constexpr uint32_t B_BANK_SECTION_BIT_MASK = {{ B_BANK_SECTION_BIT_MASK }};
+
+constexpr uint32_t A_BANK_SECTION_BIT_MASK = {{ A_BANK_SECTION_BIT_MASK }};
+constexpr uint32_t A_K_GROUP_BANK_BIT_SHIFT = {{ A_K_GROUP_BANK_BIT_SHIFT }};
+
 constexpr uint32_t FLOATS_PER_FLOAT4 = 4;
 constexpr uint32_t BYTES_PER_FLOAT4 = 16;
 constexpr uint32_t THREADS_PER_WARP = 32;
 
+constexpr uint32_t SHARED_MEMORY_BANKS = 32;
+
 constexpr uint32_t FLOAT4_OFFSET_MASK = FLOATS_PER_FLOAT4 - 1u;
-constexpr uint32_t TILE_M_WRAP_MASK = TILE_M - 1u;
-constexpr uint32_t COLS_PER_THREAD_SHIFT = 3;
+
+constexpr uint32_t A_BANK_POSITION_MASK = (TILE_M < SHARED_MEMORY_BANKS ? TILE_M : SHARED_MEMORY_BANKS) - FLOATS_PER_FLOAT4;
 
 
 namespace {
@@ -51,14 +58,16 @@ struct TileCoord{
 
 
 __device__ __forceinline__ TileCoord aTilePhysicalCoord(uint32_t logicalX, uint32_t logicalY) {
-    const uint32_t shift = logicalX & ~FLOAT4_OFFSET_MASK;
-    return TileCoord{(logicalY + shift) & TILE_M_WRAP_MASK, logicalX};
+    const uint32_t bankSectionXorMask = ((logicalY / SHARED_MEMORY_BANKS) & A_BANK_SECTION_BIT_MASK) * FLOATS_PER_FLOAT4;
+    const uint32_t kGroupXorMask = ((logicalX & ~FLOAT4_OFFSET_MASK) << A_K_GROUP_BANK_BIT_SHIFT) & A_BANK_POSITION_MASK;
+    return TileCoord{logicalY ^ bankSectionXorMask ^ kGroupXorMask, logicalX};
 }
 
 
 __device__ __forceinline__ TileCoord bTilePhysicalCoord(uint32_t logicalX, uint32_t logicalY) {
-    const uint32_t halfSwapMask = (logicalX >> COLS_PER_THREAD_SHIFT) & FLOATS_PER_FLOAT4;
-    return TileCoord{logicalX ^ halfSwapMask, logicalY};
+    const uint32_t bankSectionIdx = logicalX / SHARED_MEMORY_BANKS;
+    const uint32_t floatIdxXorMask = (bankSectionIdx & B_BANK_SECTION_BIT_MASK) * FLOATS_PER_FLOAT4;
+    return TileCoord{logicalX ^ floatIdxXorMask, logicalY};
 }
 
 

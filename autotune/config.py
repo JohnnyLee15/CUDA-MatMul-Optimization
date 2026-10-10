@@ -11,7 +11,7 @@ class MatrixSizes:
 
 
 @dataclass(frozen=True)
-class Config:
+class KernelLayout:
     block_x: int
     block_y: int
 
@@ -25,8 +25,6 @@ class Config:
 
     warp_subtiles_per_warp_tile_m: int
     warp_subtiles_per_warp_tile_n: int
-
-    acc_loop_unroll: int
 
 
     @property
@@ -78,17 +76,42 @@ class Config:
         return self.floats_per_tile_load_pass // self.tile_n
 
 
+@dataclass(frozen=True)
+class Config:
+    layout: KernelLayout
+    acc_loop_unroll: int
+
+
     @property
     def name(self) -> str:
         return (
-            f"bx_{self.block_x}_"
-            f"by_{self.block_y}_"
-            f"wsm_{self.warp_subtiles_per_warp_tile_m}_"
-            f"wsn_{self.warp_subtiles_per_warp_tile_n}_"
-            f"ttm_{self.rows_per_thread_tile}_"
-            f"ttn_{self.cols_per_thread_tile}_"
-            f"btk_{self.tile_k}_"
-            f"wtm_{self.warp_tile_m}_"
-            f"wtn_{self.warp_tile_n}_"
+            f"bx_{self.layout.block_x}_"
+            f"by_{self.layout.block_y}_"
+            f"wsm_{self.layout.warp_subtiles_per_warp_tile_m}_"
+            f"wsn_{self.layout.warp_subtiles_per_warp_tile_n}_"
+            f"ttm_{self.layout.rows_per_thread_tile}_"
+            f"ttn_{self.layout.cols_per_thread_tile}_"
+            f"btk_{self.layout.tile_k}_"
+            f"wtm_{self.layout.warp_tile_m}_"
+            f"wtn_{self.layout.warp_tile_n}_"
             f"unroll_{self.acc_loop_unroll}"
         )
+
+
+@dataclass(frozen=True)
+class ATileMappingParams:
+    bank_section_bit_mask: int
+    k_group_bank_bit_shift: int
+
+
+@dataclass(frozen=True)
+class BTileMappingParams:
+    bank_section_bit_mask: int
+
+
+@dataclass(frozen=True)
+class KernelSpec:
+    config: Config
+    a_tile_mapping: ATileMappingParams
+    b_tile_mapping: BTileMappingParams
+

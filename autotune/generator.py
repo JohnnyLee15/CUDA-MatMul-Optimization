@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from .config import Config
+from .config import KernelSpec
 from .constants import (
     KERNELS_DIR,
     CUDA_FILE_EXT,
@@ -32,28 +32,37 @@ THREAD_TILES_PER_WARP_SUBTILE_N = "THREAD_TILES_PER_WARP_SUBTILE_N"
 A_TILE_ROW_STRIDE = "A_TILE_ROW_STRIDE"
 B_TILE_ROW_STRIDE = "B_TILE_ROW_STRIDE"
 
+B_BANK_SECTION_BIT_MASK = "B_BANK_SECTION_BIT_MASK"
+A_BANK_SECTION_BIT_MASK = "A_BANK_SECTION_BIT_MASK"
+A_K_GROUP_BANK_BIT_SHIFT = "A_K_GROUP_BANK_BIT_SHIFT"
+
 ACC_LOOP_UNROLL = "ACC_LOOP_UNROLL"
 
 
-def _build_params(config: Config) -> dict[str, int]:
+def _build_params(kernel_spec: KernelSpec) -> dict[str, int]:
+    config = kernel_spec.config
+    layout = config.layout
     return {
-        BLOCK_X: config.block_x,
-        BLOCK_Y: config.block_y,
-        ROWS_PER_THREAD_TILE: config.rows_per_thread_tile,
-        COLS_PER_THREAD_TILE: config.cols_per_thread_tile,
-        TILE_M: config.tile_m,
-        TILE_N: config.tile_n,
-        TILE_K: config.tile_k,
-        WARP_TILE_M: config.warp_tile_m,
-        WARP_TILE_N: config.warp_tile_n,
-        WARP_SUBTILES_PER_WARP_TILE_M: config.warp_subtiles_per_warp_tile_m,
-        WARP_SUBTILES_PER_WARP_TILE_N: config.warp_subtiles_per_warp_tile_n,
-        WARP_SUBTILE_M: config.warp_subtile_m,
-        WARP_SUBTILE_N: config.warp_subtile_n,
-        WARP_TILES_PER_BLOCK_N: config.warp_tiles_per_block_n,
-        THREAD_TILES_PER_WARP_SUBTILE_N: config.thread_tiles_per_warp_subtile_n,
-        A_TILE_ROW_STRIDE: config.a_tile_row_stride,
-        B_TILE_ROW_STRIDE: config.b_tile_row_stride,
+        BLOCK_X: layout.block_x,
+        BLOCK_Y: layout.block_y,
+        ROWS_PER_THREAD_TILE: layout.rows_per_thread_tile,
+        COLS_PER_THREAD_TILE: layout.cols_per_thread_tile,
+        TILE_M: layout.tile_m,
+        TILE_N: layout.tile_n,
+        TILE_K: layout.tile_k,
+        WARP_TILE_M: layout.warp_tile_m,
+        WARP_TILE_N: layout.warp_tile_n,
+        WARP_SUBTILES_PER_WARP_TILE_M: layout.warp_subtiles_per_warp_tile_m,
+        WARP_SUBTILES_PER_WARP_TILE_N: layout.warp_subtiles_per_warp_tile_n,
+        WARP_SUBTILE_M: layout.warp_subtile_m,
+        WARP_SUBTILE_N: layout.warp_subtile_n,
+        WARP_TILES_PER_BLOCK_N: layout.warp_tiles_per_block_n,
+        THREAD_TILES_PER_WARP_SUBTILE_N: layout.thread_tiles_per_warp_subtile_n,
+        A_TILE_ROW_STRIDE: layout.a_tile_row_stride,
+        B_TILE_ROW_STRIDE: layout.b_tile_row_stride,
+        B_BANK_SECTION_BIT_MASK: kernel_spec.b_tile_mapping.bank_section_bit_mask,
+        A_BANK_SECTION_BIT_MASK: kernel_spec.a_tile_mapping.bank_section_bit_mask,
+        A_K_GROUP_BANK_BIT_SHIFT: kernel_spec.a_tile_mapping.k_group_bank_bit_shift,
         ACC_LOOP_UNROLL: config.acc_loop_unroll,
     }
 
@@ -66,10 +75,10 @@ def _build_kernel(params: dict[str, int]) -> str:
     return template_str
 
 
-def generate_kernel(config: Config) -> Path:
+def generate_kernel(kernel_spec: KernelSpec) -> Path:
     KERNELS_DIR.mkdir(parents=True, exist_ok=True)
-    params = _build_params(config)
+    params = _build_params(kernel_spec)
     kernel_str = _build_kernel(params)
-    kernel_path = KERNELS_DIR / f"{config.name}.{CUDA_FILE_EXT}"
+    kernel_path = KERNELS_DIR / f"{kernel_spec.config.name}.{CUDA_FILE_EXT}"
     kernel_path.write_text(kernel_str)
     return kernel_path

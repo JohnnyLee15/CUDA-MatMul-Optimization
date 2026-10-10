@@ -4,14 +4,15 @@ from pathlib import Path
 from .constants import (
     OBJECT_FILE_EXT,
     ROOT_DIR,
-    OBJECTS_DIR,
+    KERNEL_OBJECTS_DIR,
+    BENCHMARK_OBJECTS_DIR,
     EXECUTABLES_DIR,
 )
 
 
 def compile_kernel(kernel_path: Path) -> Path:
-    OBJECTS_DIR.mkdir(parents=True, exist_ok=True)
-    object_path = OBJECTS_DIR / f"{kernel_path.stem}.{OBJECT_FILE_EXT}"
+    KERNEL_OBJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    object_path = KERNEL_OBJECTS_DIR / f"{kernel_path.stem}.{OBJECT_FILE_EXT}"
     command = [
         "nvcc",
         "-std=c++20",
@@ -38,7 +39,7 @@ def compile_benchmark_sources() -> list[Path]:
         ROOT_DIR / "src" / "cuda" / "matMulCudaNaive.cu",
     ]
 
-    benchmark_objects_dir = OBJECTS_DIR / "benchmark"
+    benchmark_objects_dir = BENCHMARK_OBJECTS_DIR
     benchmark_objects_dir.mkdir(parents=True, exist_ok=True)
 
     object_paths = []
