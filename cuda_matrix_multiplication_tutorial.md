@@ -35,7 +35,7 @@ In the following examples, `x` is the column, `y` is the row, and `z` is the pla
 
 ### 2D Coordinates Example
 
-Say we have an $M \times N$ matrix $A$ that is row major. That is $A = [a_{1, 1}, a_{1, 2}, \dots a_{1, N}, a_{2, 1}, a_{2, 2}, \dots a_{M, N}]$
+Say we have an $`M \times N`$ matrix $`A`$ that is row major. That is $`A = [a_{1, 1}, a_{1, 2}, \dots a_{1, N}, a_{2, 1}, a_{2, 2}, \dots a_{M, N}]`$
 
 The storage order illustration uses one based subscripts. The indexing formulas below use zero based coordinates.
 
@@ -45,7 +45,7 @@ First, we go from coordinates to a flat index. Given 0 indexed coordinates `(x, 
 i = y * N + x
 ```
 
-Each row contains $N$ elements. Since `y` tells us how many rows come before the current row, `y * N` skips those rows and puts us at the start of the current row. Adding `x` moves us to the desired element within that row.
+Each row contains $`N`$ elements. Since `y` tells us how many rows come before the current row, `y * N` skips those rows and puts us at the start of the current row. Adding `x` moves us to the desired element within that row.
 
 Now, we go from a flat index to coordinates. Given index `i`:
 
@@ -62,7 +62,7 @@ Using integer division, `i / N` counts how many complete rows the `i` preceding 
 
 ### 3D Coordinates Example
 
-Say we have a $Z \times Y \times X$ tensor $A$ that is row major. That is $A = [a_{1, 1, 1}, a_{1, 1, 2}, \dots a_{1, 1, X}, a_{1, 2, 1}, a_{1, 2, 2}, \dots a_{1, Y, X}, a_{2, 1, 1}, \dots, a_{Z, Y, X}]$
+Say we have a $`Z \times Y \times X`$ tensor $`A`$ that is row major. That is $`A = [a_{1, 1, 1}, a_{1, 1, 2}, \dots a_{1, 1, X}, a_{1, 2, 1}, a_{1, 2, 2}, \dots a_{1, Y, X}, a_{2, 1, 1}, \dots, a_{Z, Y, X}]`$
 
 The storage order illustration uses one based subscripts. The indexing formulas below use zero based coordinates.
 
@@ -249,10 +249,10 @@ Assume `k = 256`, `n = 1024`, with `16 x 16` = `256` threads per block. Also ass
 
 Each thread is assigned to calculate one element of `c` specifically at index `c[y * n + x] == c[y][x]`.
 
-We will examine the first warp of block `(0, 0)` at loop iteration `i = 0`. Denote a thread as $t_i$, $i \in \{0, 1, \dots, 31\}$. Their (`threadIdx.x`, `threadIdx.y`) coordinates are:
+We will examine the first warp of block `(0, 0)` at loop iteration `i = 0`. Denote a thread as $`t_i`$, $`i \in \{0, 1, \dots, 31\}`$. Their (`threadIdx.x`, `threadIdx.y`) coordinates are:
 
-- $t_0: (0, 0), t_1: (1, 0), \dots, t_{15}: (15, 0)$
-- $t_{16}: (0, 1), t_{17}: (1, 1), \dots, t_{31}: (15, 1)$
+- $`t_0: (0, 0), t_1: (1, 0), \dots, t_{15}: (15, 0)`$
+- $`t_{16}: (0, 1), t_{17}: (1, 1), \dots, t_{31}: (15, 1)`$
 
 First, consider the load from `a`: `a[y * k + i]`
 
@@ -395,17 +395,17 @@ Each thread is assigned to calculate one element of `c` specifically at index `c
 
 Now consider an output row in `c`. Each element
 
-$$
+```math
 c_{i,j}, \qquad i \in \{0,1,\dots,m-1\}, \quad j \in \{0,1,\dots,n-1\}
-$$
+```
 
-is calculated by taking the dot product between the entire row $a_{i,:}$ and the entire column $b_{:,j}$:
+is calculated by taking the dot product between the entire row $`a_{i,:}`$ and the entire column $`b_{:,j}`$:
 
-$$
+```math
 c_{i,j} = a_{i,:} \cdot b_{:,j}.
-$$
+```
 
-Thus, an entire row $c_{i,:}$ is calculated by taking the dot product between $a_{i,:}$ and $b_{:,j}$ for every $j \in \{0,1,\dots,n-1\}$. Similarly, an entire column $c_{:,j}$ is calculated by taking the dot product between $a_{i,:}$ and $b_{:,j}$ for every $i \in \{0,1,\dots,m-1\}$.
+Thus, an entire row $`c_{i,:}`$ is calculated by taking the dot product between $`a_{i,:}`$ and $`b_{:,j}`$ for every $`j \in \{0,1,\dots,n-1\}`$. Similarly, an entire column $`c_{:,j}`$ is calculated by taking the dot product between $`a_{i,:}`$ and $`b_{:,j}`$ for every $`i \in \{0,1,\dots,m-1\}`$.
 
 Therefore, each element of `a` is reused `n` times across the complete matrix multiplication, while each element of `b` is reused `m` times. The naive kernel repeatedly issues loads for the same elements of `a` and `b`. Rather than repeatedly relying on global memory accesses and the hardware cache hierarchy to provide this reused data, we can explicitly load portions of `a` and `b` into shared memory and repeatedly access them from there.
 
@@ -1492,17 +1492,17 @@ __global__ void matMulCudaVectorizedExactFitKernel (
 
 This is an exact-fit kernel, so it requires the matrix dimensions to be exactly divisible by the tile dimensions. Since
 
-$$
+```math
 TILE\_M = 128,\qquad TILE\_N = 128,\qquad TILE\_K = 32,
-$$
+```
 
 we require
 
-$$
+```math
 m \bmod 128 = 0,\qquad
 n \bmod 128 = 0,\qquad
 k \bmod 32 = 0.
-$$
+```
 
 A general version of this kernel is also included in the repository for matrix dimensions that are not exact multiples of the tile dimensions.
 
@@ -1712,15 +1712,15 @@ This is a bank conflict: threads in the same warp access different memory addres
 
 In the previous example, we looked at what happens when each thread in a warp accesses one `float`. Since there are 32 threads in a warp and each thread accesses one 4 byte `float`, the warp requests:
 
-$$
+```math
 32 \times 4 = 128 \text{ bytes}
-$$
+```
 
 This matches the maximum amount of data that the 32 shared memory banks can serve in a single memory transaction:
 
-$$
+```math
 32 \text{ banks} \times 4 \text{ bytes per bank} = 128 \text{ bytes}
-$$
+```
 
 But what happens if a warp instruction requests more than 128 bytes? Since shared memory can serve at most 128 bytes in a single transaction, the request must be split into multiple transactions. For example, consider the following instructions:
 
@@ -1746,15 +1746,15 @@ thread 31: idx = 31 * 4 = 124. Accesses banks (124-127) mod 32 = (28-31)
 
 Each thread now accesses four banks because each `float4` contains four 4 byte float values. Across the entire warp, the instruction requests:
 
-$$
+```math
 32 \times 16 = 512 \text{ bytes}
-$$
+```
 
 At first, this may look like a bank conflict. For example, threads 0, 8, 16, and 24 all access banks 0 through 3, but they access different addresses within those banks. However, there is one important detail missing. A bank conflict is not determined by comparing every bank accessed by the entire warp wide request at once. Instead, bank conflicts are determined within each shared memory transaction. Since a single shared memory transaction can serve at most 128 bytes, a 512 byte request requires at least:
 
-$$
+```math
 \dfrac{512 \text{ bytes}}{128 \text{ bytes per memory transaction}}=4 \text{ memory transactions}
-$$
+```
 
 even when there are no bank conflicts. For the access pattern above, those four transactions correspond to:
 
@@ -1775,49 +1775,49 @@ Now that we've found the new access pattern we want, we need a way to actually c
 
 ### Fixing `aTile` Bank Conflicts
 
-So, we need to figure out how to map each logical coordinate $(x,y)$ to a physical coordinate $(x',y')$. This allows us to keep the same logical layout of aTile, while changing where each value is physically stored in shared memory to remove the bank conflicts.
+So, we need to figure out how to map each logical coordinate $`(x,y)`$ to a physical coordinate $`(x',y')`$. This allows us to keep the same logical layout of aTile, while changing where each value is physically stored in shared memory to remove the bank conflicts.
 
 Let's go through how we can derive this mapping. More formally, we eventually need this mapping to be a **bijection**, meaning that it is both one-to-one and onto. One-to-one means that distinct logical coordinates map to distinct physical coordinates, while onto means that every physical coordinate gets mapped to by some logical coordinate.
 
 We can define our mapping as
 
-$$
+```math
 F:L\rightarrow P
-$$
+```
 
-where $L$ is the set of logical coordinates and $P$ is the set of physical coordinates.
+where $`L`$ is the set of logical coordinates and $`P`$ is the set of physical coordinates.
 
-Since logically `aTile` has 32 values in the $x$ direction and 128 values in the $y$ direction,
+Since logically `aTile` has 32 values in the $`x`$ direction and 128 values in the $`y`$ direction,
 
-$$
+```math
 L=\{0,\ldots,31\}\times\{0,\ldots,127\}.
-$$
+```
 
 After the transpose, the physical coordinate space is
 
-$$
+```math
 P=\{0,\ldots,127\}\times\{0,\ldots,31\}.
-$$
+```
 
 Both spaces contain
 
-$$
+```math
 32\cdot128=4096
-$$
+```
 
 coordinates.
 
 We will prove that our final transformation is a bijection after deriving it.
 
-First, if we remember from the [vectorized kernel](#optimization-5-vectorization), we transposed `aTile`, so the first step in our function is to flip $(x,y)$.
+First, if we remember from the [vectorized kernel](#optimization-5-vectorization), we transposed `aTile`, so the first step in our function is to flip $`(x,y)`$.
 
 Function after adding step 1:
 
-$$
+```math
 F(x,y)=(y,x)
-$$
+```
 
-Remember that when we write a coordinate as $(x,y)$, the actual array access is
+Remember that when we write a coordinate as $`(x,y)`$, the actual array access is
 
 ```cuda
 aTile[y][x]
@@ -1827,15 +1827,15 @@ because arrays are indexed as `[row][column]`, or `[y][x]`.
 
 For example, the logical coordinate
 
-$$
+```math
 (4,0)
-$$
+```
 
 gets transformed into the physical coordinate
 
-$$
+```math
 (0,4),
-$$
+```
 
 which corresponds to
 
@@ -1845,7 +1845,7 @@ aTile[4][0]
 
 in memory.
 
-The next step is to shift the transposed $x$ coordinate to the correct bank. I have provided the bank mapping for each thread below, along with its `aTileX` and `aTileY` values:
+The next step is to shift the transposed $`x`$ coordinate to the correct bank. I have provided the bank mapping for each thread below, along with its `aTileX` and `aTileY` values:
 
 | tid | aTileY | aTileX | Original Bank | Desired Bank | Bank Mapping |
 | ---: | ---: | ---: | ---: | ---: | :--- |
@@ -1884,9 +1884,9 @@ The next step is to shift the transposed $x$ coordinate to the correct bank. I h
 
 You might be wondering why I included the `aTileX` and `aTileY` values. Which is fair, but look closely at the pattern that emerges. The desired bank is simply
 
-$$
+```math
 \text{Desired Bank}=\text{aTileX}+\text{aTileY}.
-$$
+```
 
 Now we need to connect this bank pattern back to our physical coordinate. Remember that
 
@@ -1894,69 +1894,69 @@ Now we need to connect this bank pattern back to our physical coordinate. Rememb
 float aTile[32][128];
 ```
 
-is stored in row-major order. Therefore, for a physical coordinate $(x',y')$, the flat index is
+is stored in row-major order. Therefore, for a physical coordinate $`(x',y')`$, the flat index is
 
-$$
+```math
 I=128y'+x'.
-$$
+```
 
 Since shared memory has 32 banks, the bank for a `float` is
 
-$$
+```math
 B=I\bmod32.
-$$
+```
 
 Substituting the flat index gives
 
-$$
+```math
 B=(128y'+x')\bmod32.
-$$
+```
 
 Since 128 is a multiple of 32,
 
-$$
+```math
 128y'\bmod32=0,
-$$
+```
 
 so this simplifies to
 
-$$
+```math
 B=x'\bmod32.
-$$
+```
 
-Therefore, for `aTile`, the physical $x$ coordinate determines which bank the value maps to.
+Therefore, for `aTile`, the physical $`x`$ coordinate determines which bank the value maps to.
 
 From the table above, we know that for the `toLoad.x` instruction we want
 
-$$
+```math
 x'=\text{aTileY}+\text{aTileX}.
-$$
+```
 
 Using our logical coordinates, this is
 
-$$
+```math
 x'=y+x.
-$$
+```
 
-The physical $y$ coordinate is still just the transposed logical $x$ coordinate:
+The physical $`y`$ coordinate is still just the transposed logical $`x`$ coordinate:
 
-$$
+```math
 y'=x.
-$$
+```
 
 Function after adding step 2:
 
-$$
+```math
 F(x,y)=(y+x,x)
-$$
+```
 
-For the specific `toLoad.x` store we are analyzing, the values of $x$ and $y$ have a very useful structure because each thread loads a `float4`. Since each `float4` contains four floats, the starting logical $x$ coordinate for each thread advances by four:
+For the specific `toLoad.x` store we are analyzing, the values of $`x`$ and $`y`$ have a very useful structure because each thread loads a `float4`. Since each `float4` contains four floats, the starting logical $`x`$ coordinate for each thread advances by four:
 
 ```text
 x: 0, 4, 8, 12, 16, 20, 24, 28
 ```
 
-Within each thread group, $x$ therefore tells us the thread's position in that group, in steps of four banks. Meanwhile, $y$ identifies which of the four thread groups the thread belongs to:
+Within each thread group, $`x`$ therefore tells us the thread's position in that group, in steps of four banks. Meanwhile, $`y`$ identifies which of the four thread groups the thread belongs to:
 
 ```text
 group 0 → y = 0
@@ -1965,11 +1965,11 @@ group 2 → y = 2
 group 3 → y = 3
 ```
 
-This is why adding them is useful. The $x$ value spaces accesses four banks apart, while $y$ fills in the four banks between those multiples of four. Therefore,
+This is why adding them is useful. The $`x`$ value spaces accesses four banks apart, while $`y`$ fills in the four banks between those multiples of four. Therefore,
 
-$$
+```math
 x' = x + y
-$$
+```
 
 gives:
 
@@ -2020,9 +2020,9 @@ aTile[3][aTilePhysicalX] = toLoad.w
 
 However, if we apply our current transformation
 
-$$
+```math
 F(x,y)=(y+x,x)
-$$
+```
 
 independently to all four logical coordinates, we get:
 
@@ -2033,132 +2033,132 @@ aTile[2][aTileY + 2] = toLoad.z
 aTile[3][aTileY + 3] = toLoad.w
 ```
 
-Now each of the four values has been shifted into a different physical column. The problem is that the raw logical $x$ coordinate changes for each of the four values. Instead, we want all four logical $x$ coordinates belonging to the same `float4` group to use the **same column shift**. The pattern we want is:
+Now each of the four values has been shifted into a different physical column. The problem is that the raw logical $`x`$ coordinate changes for each of the four values. Instead, we want all four logical $`x`$ coordinates belonging to the same `float4` group to use the **same column shift**. The pattern we want is:
 
 ```text
 aTileX:  0  1  2  3 | 4  5  6  7 | 8  9 10 11 | 12 13 14 15 | ...
 shift:   0  0  0  0 | 4  4  4  4 | 8  8  8  8 | 12 12 12 12 | ...
 ```
 
-In other words, we need to round $x$ down to the beginning of its group of four. This can be done with
+In other words, we need to round $`x`$ down to the beginning of its group of four. This can be done with
 
-$$
+```math
 s=x-(x\bmod4),
-$$
+```
 
-where $s$ denotes the shift. For example,
+where $`s`$ denotes the shift. For example,
 
-$$
+```math
 x=6
-$$
+```
 
 gives
 
-$$
+```math
 s=6-(6\bmod4)=6-2=4,
-$$
+```
 
 while
 
-$$
+```math
 x=11
-$$
+```
 
 gives
 
-$$
+```math
 s=11-(11\bmod4)=11-3=8.
-$$
+```
 
 Thus, the shift changes from simply
 
-$$
+```math
 x
-$$
+```
 
 to
 
-$$
+```math
 x-(x\bmod4).
-$$
+```
 
 Function after adding step 3:
 
-$$
+```math
 F(x,y)= \left( y+x-(x\bmod4), x \right)
-$$
+```
 
-At this point we have essentially found our transformation, but we are missing one thing. `aTile` has 128 columns, meaning the valid physical $x$ coordinates are
+At this point we have essentially found our transformation, but we are missing one thing. `aTile` has 128 columns, meaning the valid physical $`x`$ coordinates are
 
-$$
+```math
 0,\ldots,127.
-$$
+```
 
-However, our transformed $x$ coordinate can go outside this range. The largest possible logical $y$ value is
+However, our transformed $`x`$ coordinate can go outside this range. The largest possible logical $`y`$ value is
 
-$$
+```math
 127,
-$$
+```
 
 and the largest possible shift is
 
-$$
+```math
 28.
-$$
+```
 
-Therefore, the transformed $x$ coordinate can be as large as
+Therefore, the transformed $`x`$ coordinate can be as large as
 
-$$
+```math
 127+28=155.
-$$
+```
 
-To keep the physical $x$-coordinate inside the 128 columns of aTile, we wrap the transformed $x$-coordinate back into the valid range 0 to 127 using modulo 128.
+To keep the physical $`x`$-coordinate inside the 128 columns of aTile, we wrap the transformed $`x`$-coordinate back into the valid range 0 to 127 using modulo 128.
 
-$$
+```math
 x'= \left( y+x-(x\bmod4) \right)\bmod128.
-$$
+```
 
 Therefore, our final transformation is
 
-$$
+```math
 \boxed{ F(x,y)= \left( \left(y+x-(x\bmod4)\right)\bmod128, x \right) }
-$$
+```
 
 There is one other useful property here. Taking the result modulo 128 does **not** change which bank the coordinate maps to, because 128 is itself a multiple of the 32 banks. For example,
 
-$$
+```math
 155\bmod128=27,
-$$
+```
 
 but
 
-$$
+```math
 155\bmod32=27
-$$
+```
 
 and
 
-$$
+```math
 27\bmod32=27.
-$$
+```
 
 So the modulo 128 keeps the physical coordinate inside `aTile` while preserving the bank mapping that we designed. This gives us our final logical-to-physical coordinate transformation.
 
-Next, we show that $F$ is well-defined as a function
+Next, we show that $`F`$ is well-defined as a function
 
-$$
+```math
 F:L\rightarrow P.
-$$
+```
 
-Let $(x,y)\in L$. Then $x\in\{0,1,\dots,31\}$ and $y\in\{0,1,\dots,127\}$. The physical $x$ coordinate is $x'=\left(y+x-(x\bmod4)\right)\bmod128$. By definition of modulo 128 and since $y+x-(x\bmod4)\geq0$, we have $x'\in\{0,1,\dots,127\}$. The physical $y$ coordinate is $y'=x$. Since $x\in\{0,1,\dots,31\}$, we have $y'\in\{0,1,\dots,31\}$. Therefore, $F(x,y)\in P$.
+Let $`(x,y)\in L`$. Then $`x\in\{0,1,\dots,31\}`$ and $`y\in\{0,1,\dots,127\}`$. The physical $`x`$ coordinate is $`x'=\left(y+x-(x\bmod4)\right)\bmod128`$. By definition of modulo 128 and since $`y+x-(x\bmod4)\geq0`$, we have $`x'\in\{0,1,\dots,127\}`$. The physical $`y`$ coordinate is $`y'=x`$. Since $`x\in\{0,1,\dots,31\}`$, we have $`y'\in\{0,1,\dots,31\}`$. Therefore, $`F(x,y)\in P`$.
 
-Since the formula for $F$ gives exactly one ordered pair for every $(x,y)\in L$, $F$ is well-defined as a function
+Since the formula for $`F`$ gives exactly one ordered pair for every $`(x,y)\in L`$, $`F`$ is well-defined as a function
 
-$$
+```math
 F:L\rightarrow P.
-$$
+```
 
-Now we prove that $F$ is a bijection. First, we prove that $F$ is one-to-one. Assume that $F$ is not one-to-one. Then there exist $(x_1,y_1),(x_2,y_2)\in L$ such that $(x_1,y_1)\neq(x_2,y_2)$ and $F(x_1,y_1)=F(x_2,y_2)$.
+Now we prove that $`F`$ is a bijection. First, we prove that $`F`$ is one-to-one. Assume that $`F`$ is not one-to-one. Then there exist $`(x_1,y_1),(x_2,y_2)\in L`$ such that $`(x_1,y_1)\neq(x_2,y_2)`$ and $`F(x_1,y_1)=F(x_2,y_2)`$.
 
 Now,
 
@@ -2172,16 +2172,16 @@ F(x_1,y_1)=F(x_2,y_2)
 
 which gives,
 
-$$
+```math
 \begin{aligned}
 (y_1+x_1-(x_1\bmod4))\bmod128
 &=
 (y_2+x_2-(x_2\bmod4))\bmod128 \\
 x_1 &= x_2
 \end{aligned}
-$$
+```
 
-Let $x$ denote the common value of $x_1$ and $x_2$. Then,
+Let $`x`$ denote the common value of $`x_1`$ and $`x_2`$. Then,
 
 ```math
 (y_1+x_1-(x_1\bmod4))\bmod128
@@ -2193,7 +2193,7 @@ Let $x$ denote the common value of $x_1$ and $x_2$. Then,
 (y_2+x-(x\bmod4))\bmod128.
 ```
 
-Let $c = x-(x\bmod4)$. Then,
+Let $`c = x-(x\bmod4)`$. Then,
 
 ```math
 (y_1+c)\bmod128
@@ -2201,60 +2201,60 @@ Let $c = x-(x\bmod4)$. Then,
 (y_2+c)\bmod128.
 ```
 
-Thus, when dividing $y_1+c$ and $y_2+c$ by 128, they produce the same remainder
+Thus, when dividing $`y_1+c`$ and $`y_2+c`$ by 128, they produce the same remainder
 
-$$
+```math
 r\in\{0,1,\dots,127\}.
-$$
+```
 
-By the Division Algorithm, there exist integers $q_1,q_2\in\mathbb Z$ such that
+By the Division Algorithm, there exist integers $`q_1,q_2\in\mathbb Z`$ such that
 
-$$
+```math
 \begin{aligned}
 y_1+c&=128q_1+r \\
 y_2+c&=128q_2+r.
 \end{aligned}
-$$
+```
 
-Solving both equations for $r$ gives
+Solving both equations for $`r`$ gives
 
-$$
+```math
 \begin{aligned}
 r&=y_1+c-128q_1 \\
 r&=y_2+c-128q_2.
 \end{aligned}
-$$
+```
 
 Therefore,
 
-$$
+```math
 \begin{aligned}
 y_1 + c- 128q_1 &= y_2 + c - 128q_2 \\
 y_1 + c - y_2 - c &= 128q_1 - 128q_2 \\
 y_1 - y_2 &= 128(q_1 - q_2) \quad \text{where } (q_1 - q_2) \in \mathbb{Z} \\
 y_1 - y_2 &= 128k \quad \text{where } k = q_1 - q_2.
 \end{aligned}
-$$
+```
 
-Since $L= \{0,1,\dots,31\} \times \{0,1,\dots,127\}$, therefore $y_1,y_2\in\{0,1,\dots,127\}$. Thus, $(y_1 - y_2) \in \{-127, -126, \dots, -1, 0, 1, \dots 127\}$. Therefore, it must be that $k = 0$, meaning
+Since $`L= \{0,1,\dots,31\} \times \{0,1,\dots,127\}`$, therefore $`y_1,y_2\in\{0,1,\dots,127\}`$. Thus, $`(y_1 - y_2) \in \{-127, -126, \dots, -1, 0, 1, \dots 127\}`$. Therefore, it must be that $`k = 0`$, meaning
 
-$$
+```math
 y_1 - y_2 = 128k \Leftrightarrow y_1 = y_2.
-$$
+```
 
-Thus, it has been shown that $x_1 = x_2$ and $y_1 = y_2$, meaning $(x_1, y_1) = (x_2, y_2)$ which contradicts our assumption that $(x_1,y_1)\neq(x_2,y_2)$. Therefore, $F$ must be one-to-one.
+Thus, it has been shown that $`x_1 = x_2`$ and $`y_1 = y_2`$, meaning $`(x_1, y_1) = (x_2, y_2)`$ which contradicts our assumption that $`(x_1,y_1)\neq(x_2,y_2)`$. Therefore, $`F`$ must be one-to-one.
 
-Now, we must prove that $F$ is onto.
+Now, we must prove that $`F`$ is onto.
 
-Since $F$ is one-to-one, by definition $F$ maps distinct elements of $L$ to distinct elements in $F(L)$. Therefore $|F(L)| = |L|$.
+Since $`F`$ is one-to-one, by definition $`F`$ maps distinct elements of $`L`$ to distinct elements in $`F(L)`$. Therefore $`|F(L)| = |L|`$.
 
-Since $|L| = |P|$, therefore $|F(L)| = |P|$.
+Since $`|L| = |P|`$, therefore $`|F(L)| = |P|`$.
 
-By definition $F(L) \subseteq P$.
+By definition $`F(L) \subseteq P`$.
 
-Since $P$ is finite, any proper subset of $P$ must have strictly fewer elements than $P$. However, $|F(L)| = |P|$. Therefore, $F(L)$ cannot be a proper subset of $P$, so $F(L) = P$, proving that $F$ is onto.
+Since $`P`$ is finite, any proper subset of $`P`$ must have strictly fewer elements than $`P`$. However, $`|F(L)| = |P|`$. Therefore, $`F(L)`$ cannot be a proper subset of $`P`$, so $`F(L) = P`$, proving that $`F`$ is onto.
 
-Since $F$ is one-to-one and onto, by definition $F$ is a bijection.
+Since $`F`$ is one-to-one and onto, by definition $`F`$ is a bijection.
 
 Since we have proved that our logical-to-physical mapping is a bijection, we can be sure that every unique logical coordinate of `aTile` maps to exactly one unique physical coordinate, and every physical coordinate corresponds to exactly one logical coordinate.
 
@@ -2318,25 +2318,25 @@ So rather than simply shifting all of the accesses in one direction, we are effe
 
 Now that we know the physical access pattern we want, we can derive a logical-to-physical mapping that produces it.
 
-For `bTile`, the bank conflicts come entirely from which columns of `bTile` the `float4` reads access. This means our mapping only needs to affect $x$, while $y$ can stay the same. Since `COLS_PER_THREAD = 8`, each thread is responsible for eight output columns. Therefore, for a given `tx`, the logical `bTile` $x$ coordinates used by that thread are
+For `bTile`, the bank conflicts come entirely from which columns of `bTile` the `float4` reads access. This means our mapping only needs to affect $`x`$, while $`y`$ can stay the same. Since `COLS_PER_THREAD = 8`, each thread is responsible for eight output columns. Therefore, for a given `tx`, the logical `bTile` $`x`$ coordinates used by that thread are
 
-$$
+```math
 8tx, 8tx+1, \dots, 8tx+7.
-$$
+```
 
-This naturally divides the logical $x$ coordinates of `bTile` into groups of eight consecutive values. Within each group of eight logical `bTile` columns, the two loop iterations access two separate `float4`s. When `j = 0`, the thread reads the first four logical columns in the group:
+This naturally divides the logical $`x`$ coordinates of `bTile` into groups of eight consecutive values. Within each group of eight logical `bTile` columns, the two loop iterations access two separate `float4`s. When `j = 0`, the thread reads the first four logical columns in the group:
 
-$$
+```math
 8tx, 8tx+1, 8tx+2, 8tx+3.
-$$
+```
 
 When `j = 4`, the thread reads the next four logical columns:
 
-$$
+```math
 8tx+4, 8tx+5, 8tx+6, 8tx+7.
-$$
+```
 
-Now, look at the logical $x$ coordinates in groups of eight:
+Now, look at the logical $`x`$ coordinates in groups of eight:
 
 ```text
 groupIdx:      0        1        2       3       4       5       6       7
@@ -2344,39 +2344,39 @@ logical x:   0–7     8–15    16–23   24–31   32–39   40–47   48–55
 action:     keep     keep     keep    keep    swap    swap    swap    swap
 ```
 
-Now that we know our rule for when we want to swap the two `float4` groups within our group of 8 logical $x$ values, we need to express this rule mathematically.
+Now that we know our rule for when we want to swap the two `float4` groups within our group of 8 logical $`x`$ values, we need to express this rule mathematically.
 
 We have 8 groups of 8 floats, where the first 4 groups are `keep` and the second 4 groups are `swap`. So, for these first 8 groups, our rule is to `swap` if
 
-$$
+```math
 \text{groupIdx} \geq 4.
-$$
+```
 
-Now we just need to determine the group index for a given logical $x$ coordinate. Since each group contains 8 consecutive values, the group index is
+Now we just need to determine the group index for a given logical $`x`$ coordinate. Since each group contains 8 consecutive values, the group index is
 
-$$
+```math
 \left\lfloor \dfrac{x}{8} \right\rfloor.
-$$
+```
 
 For example,
 
-$$
+```math
 x \in \{0,\dots,7\} \Rightarrow \text{groupIdx}=0,
-$$
+```
 
-$$
+```math
 x \in \{8,\dots,15\} \Rightarrow \text{groupIdx}=1,
-$$
+```
 
 and so on.
 
-This works for the first 8 groups, but what about group indices larger than 7? Since our `keep, keep, keep, keep, swap, swap, swap, swap` pattern repeats every 8 groups, we need to map the group index back into the range 0–7. We can do this using the $\bmod$ operator. This gives us the rule to `swap` if
+This works for the first 8 groups, but what about group indices larger than 7? Since our `keep, keep, keep, keep, swap, swap, swap, swap` pattern repeats every 8 groups, we need to map the group index back into the range 0–7. We can do this using the $`\bmod`$ operator. This gives us the rule to `swap` if
 
-$$
+```math
 \left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4
-$$
+```
 
-Now, that we know how to determine if we need to swap an $x$ value, we need to figure out how to define an operation on $x$ to give us the desired swap. Consider $x = 38$, which from above we see is in `groupIdx = 4`, so we `swap` iteration 1 and iteration 2. Below is what we currently have:
+Now, that we know how to determine if we need to swap an $`x`$ value, we need to figure out how to define an operation on $`x`$ to give us the desired swap. Consider $`x = 38`$, which from above we see is in `groupIdx = 4`, so we `swap` iteration 1 and iteration 2. Below is what we currently have:
 
 ```text
 idx within group:  0   1  2  3 |  4  5  6  7
@@ -2390,7 +2390,7 @@ idx within group:  0   1  2  3 |  4  5  6  7
 logical x:         36 37 38 39 | 32 33 34 35
 ```
 
-For $x=38$, its index within the group is $38\bmod8=6.$ So before the swap, $x=38$ is at index 6 within the group. Looking at our desired layout, after swapping the two `float4` groups, $x=38$ should instead be at index 2:
+For $`x=38`$, its index within the group is $`38\bmod8=6.`$ So before the swap, $`x=38`$ is at index 6 within the group. Looking at our desired layout, after swapping the two `float4` groups, $`x=38`$ should instead be at index 2:
 
 ```text
 before: index 6
@@ -2403,59 +2403,59 @@ swapped idx:   4 5 6 7 | 0 1 2 3
 
 So we need an operation that maps
 
-$$
+```math
 0 \rightarrow 4, 1 \rightarrow 5, 2 \rightarrow 6, 3 \rightarrow 7,
-$$
+```
 
 and
 
-$$
+```math
 4 \rightarrow 0, 5 \rightarrow 1, 6 \rightarrow 2, 7 \rightarrow 3.
-$$
+```
 
 A simple way to get this is to add 4 to the `original idx` and then wrap the result back into the range 0–7 using modulo 8:
 
-$$
+```math
 \text{swapped idx} = (\text{original idx} + 4) \bmod 8.
-$$
+```
 
 Here, the indices can be thought of as offsets within the group. To get the logical offset, or the `original idx`, we simply do
 
-$$
+```math
 x \bmod 8.
-$$
+```
 
 Thus, the formula to get the physical offset, or `swapped idx`, is
 
-$$
+```math
 \text{physicalOffset} = ((x \bmod 8) + 4) \bmod 8
-$$
+```
 
-Now that we have the physical offset within each group of 8 logical $x$ values, we need to get the physical $x$ coordinate $x'$. This is fairly easy to reason about. We already have the physical offset within the group, so we simply need to add it to the starting physical $x$ coordinate of that group of 8.
+Now that we have the physical offset within each group of 8 logical $`x`$ values, we need to get the physical $`x`$ coordinate $`x'`$. This is fairly easy to reason about. We already have the physical offset within the group, so we simply need to add it to the starting physical $`x`$ coordinate of that group of 8.
 
 The group index is
 
-$$
+```math
 \text{groupIdx} = \left\lfloor \dfrac{x}{8} \right\rfloor,
-$$
+```
 
-so the starting $x$ coordinate of the group is
+so the starting $`x`$ coordinate of the group is
 
-$$
+```math
 8 \cdot \text{groupIdx} = 8\left\lfloor \dfrac{x}{8} \right\rfloor.
-$$
+```
 
-Thus, when we `swap` a group of 8 logical $x$ values, the physical coordinate $x'$ is
+Thus, when we `swap` a group of 8 logical $`x`$ values, the physical coordinate $`x'`$ is
 
-$$
+```math
 x' = 8\left\lfloor \dfrac{x}{8} \right\rfloor + ((x \bmod 8) + 4) \bmod 8
-$$
+```
 
 Thus our logical-to-physical mapping function is given by:
 
-$$
+```math
 F: L \rightarrow P
-$$
+```
 
 where
 
@@ -2473,48 +2473,48 @@ F(x,y) =
 
 Here,
 
-$$
+```math
 L = P = \{0, 1, \dots, 127\} \times \{0, 1, \dots, 31\}
-$$
+```
 
-where $L$ is the logical coordinate space and $P$ is the physical coordinate space.
+where $`L`$ is the logical coordinate space and $`P`$ is the physical coordinate space.
 
-First, we show that $F$ is well-defined. That is, we need to show that every $(x,y) \in L$ is mapped to exactly one element of $P$.
+First, we show that $`F`$ is well-defined. That is, we need to show that every $`(x,y) \in L`$ is mapped to exactly one element of $`P`$.
 
-Let $(x,y)\in L$. Since $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8$ is an integer, exactly one of $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 < 4$ or $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4$ must hold. Therefore, exactly one case of $F$ applies.
+Let $`(x,y)\in L`$. Since $`\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8`$ is an integer, exactly one of $`\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 < 4`$ or $`\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4`$ must hold. Therefore, exactly one case of $`F`$ applies.
 
-If $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 < 4$, then $F(x,y)=(x,y)$. Since $(x,y)\in L$ and $L=P$, we immediately have $F(x,y)\in P$.
+If $`\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 < 4`$, then $`F(x,y)=(x,y)`$. Since $`(x,y)\in L`$ and $`L=P`$, we immediately have $`F(x,y)\in P`$.
 
-Now suppose $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4$. Let $g=\left\lfloor\dfrac{x}{8}\right\rfloor$ and $s=((x\bmod8)+4)\bmod8$. Then $F(x,y)=(8g+s,y)$. Since $(x,y)\in L$, we have $0\leq x\leq127$. Therefore, $0\leq g=\left\lfloor\dfrac{x}{8}\right\rfloor\leq15$.
+Now suppose $`\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4`$. Let $`g=\left\lfloor\dfrac{x}{8}\right\rfloor`$ and $`s=((x\bmod8)+4)\bmod8`$. Then $`F(x,y)=(8g+s,y)`$. Since $`(x,y)\in L`$, we have $`0\leq x\leq127`$. Therefore, $`0\leq g=\left\lfloor\dfrac{x}{8}\right\rfloor\leq15`$.
 
-Also, since $(x\bmod8)+4\geq0$ and $s=((x\bmod8)+4)\bmod8$, by definition of modulo 8, $0\leq s\leq7$. Thus,
-$0\leq 8g+s\leq 8(15)+7=127$.
+Also, since $`(x\bmod8)+4\geq0`$ and $`s=((x\bmod8)+4)\bmod8`$, by definition of modulo 8, $`0\leq s\leq7`$. Thus,
+$`0\leq 8g+s\leq 8(15)+7=127`$.
 
-Since $y$ is unchanged and $(x,y)\in L$, we also have $0\leq y\leq31$. Therefore,
+Since $`y`$ is unchanged and $`(x,y)\in L`$, we also have $`0\leq y\leq31`$. Therefore,
 
-$$
+```math
 F(x,y)=(8g+s,y)\in P.
-$$
+```
 
-So in either case, $F$ maps every element of $L$ to exactly one element of $P$. Hence, $F$ is well-defined as a function
+So in either case, $`F`$ maps every element of $`L`$ to exactly one element of $`P`$. Hence, $`F`$ is well-defined as a function
 
-$$
+```math
 F:L\rightarrow P.
-$$
+```
 
-Now we prove that $F$ is a bijection. Since $F$ is piecewise, proving that it is one-to-one directly would require considering several separate cases. Instead, we can prove that $F$ has an inverse
+Now we prove that $`F`$ is a bijection. Since $`F`$ is piecewise, proving that it is one-to-one directly would require considering several separate cases. Instead, we can prove that $`F`$ has an inverse
 
-$$
+```math
 F^{-1}: P \rightarrow L.
-$$
+```
 
-We can do this since $F$ is a bijection if and only if $F^{-1}$ exists.
+We can do this since $`F`$ is a bijection if and only if $`F^{-1}`$ exists.
 
 First, define the candidate inverse function
 
-$$
+```math
 G: P \rightarrow L
-$$
+```
 
 where
 
@@ -2530,25 +2530,25 @@ G(x,y) =
 \end{cases}
 ```
 
-Since $L=P$ and $G$ is defined by the same piecewise rule as $F$, the argument above showing that $F$ is well-defined also shows that $G$ is well-defined. Therefore,
+Since $`L=P`$ and $`G`$ is defined by the same piecewise rule as $`F`$, the argument above showing that $`F`$ is well-defined also shows that $`G`$ is well-defined. Therefore,
 
-$$
+```math
 G:P\rightarrow L
-$$
+```
 
 is a well-defined function.
 
-To prove $F$ is invertible with inverse $G$, we must show that $\forall (x,y) \in L, (G \circ F)(x,y) = (x,y)$ and that $\forall (u,v) \in P, (F \circ G)(u,v) = (u,v)$.
+To prove $`F`$ is invertible with inverse $`G`$, we must show that $`\forall (x,y) \in L, (G \circ F)(x,y) = (x,y)`$ and that $`\forall (u,v) \in P, (F \circ G)(u,v) = (u,v)`$.
 
-First, we show that $\forall (x,y) \in L, (G \circ F)(x,y) = (x,y)$.
+First, we show that $`\forall (x,y) \in L, (G \circ F)(x,y) = (x,y)`$.
 
-Let $(x,y) \in L$. Suppose $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 < 4$. Then
+Let $`(x,y) \in L`$. Suppose $`\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 < 4`$. Then
 
-$$
+```math
 (G \circ F)(x,y) = G(F(x,y)) = G(x,y) = (x,y)
-$$
+```
 
-Now, suppose $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4$. Then
+Now, suppose $`\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4`$. Then
 
 ```math
 (G \circ F)(x,y) = G(F(x,y))
@@ -2559,29 +2559,29 @@ G
 \right)
 ```
 
-Now, let $g=\left\lfloor\dfrac{x}{8}\right\rfloor \in \mathbb{Z}$ and $r=x\bmod8 \in \mathbb{Z}, 0 \leq r < 8$. By the Division Algorithm,
+Now, let $`g=\left\lfloor\dfrac{x}{8}\right\rfloor \in \mathbb{Z}`$ and $`r=x\bmod8 \in \mathbb{Z}, 0 \leq r < 8`$. By the Division Algorithm,
 
-$$
+```math
 x = 8g + r
-$$
+```
 
-Since $\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4$, we have $g \bmod 8 \geq 4$.
+Since $`\left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4`$, we have $`g \bmod 8 \geq 4`$.
 
-Now, let $s=(r+4)\bmod8$. Then $s\in\mathbb{Z}$ and $0\leq s<8$. Therefore,
+Now, let $`s=(r+4)\bmod8`$. Then $`s\in\mathbb{Z}`$ and $`0\leq s<8`$. Therefore,
 
-$$
+```math
 G
 \left(
     8\left\lfloor \dfrac{x}{8} \right\rfloor + ((x \bmod 8) + 4) \bmod 8,y
 \right) =
 G(8g+s, y)
-$$
+```
 
-Since $0 \leq s < 8$, we have
+Since $`0 \leq s < 8`$, we have
 
-$$
+```math
 \left\lfloor \dfrac{8g+s}{8} \right\rfloor = g.
-$$
+```
 
 Therefore,
 
@@ -2592,7 +2592,7 @@ g\bmod8
 \geq4.
 ```
 
-Also, since $((8g + s) \bmod8 + 4) \bmod 8 = (s + 4) \bmod 8$, we have
+Also, since $`((8g + s) \bmod8 + 4) \bmod 8 = (s + 4) \bmod 8`$, we have
 
 ```math
 G(8g+s,y)
@@ -2605,9 +2605,9 @@ y
 
 Since
 
-$$
+```math
 s=(r+4)\bmod8,
-$$
+```
 
 we get
 
@@ -2628,21 +2628,21 @@ y
 
 Using the property
 
-$$
+```math
 ((a\bmod n)+b)\bmod n=(a+b)\bmod n \quad \text{for } a, b \in \mathbb{Z},
-$$
+```
 
 we have
 
-$$
+```math
 \begin{aligned}
 \left(((r+4)\bmod8)+4\right)\bmod8
 &=(r+8)\bmod8\\
 &=r,
 \end{aligned}
-$$
+```
 
-since $0\leq r<8$.
+since $`0\leq r<8`$.
 
 Therefore,
 
@@ -2660,17 +2660,17 @@ y
 
 Earlier we showed that
 
-$$
+```math
 x=8g+r.
-$$
+```
 
 Thus,
 
-$$
+```math
 (G\circ F)(x,y)=(x,y).
-$$
+```
 
-Now, we need to show that $\forall (u,v)\in P,\quad (F\circ G)(u,v)=(u,v)$. However, notice that $L=P$ and $F$ and $G$ are defined by the exact same function. Therefore, $F=G$.
+Now, we need to show that $`\forall (u,v)\in P,\quad (F\circ G)(u,v)=(u,v)`$. However, notice that $`L=P`$ and $`F`$ and $`G`$ are defined by the exact same function. Therefore, $`F=G`$.
 
 Thus,
 ```math
@@ -2681,9 +2681,9 @@ F\circ F
 G\circ F.
 ```
 
-We have already proved that $\forall (x,y)\in L$, $(G\circ F)(x,y)=(x,y)$.
+We have already proved that $`\forall (x,y)\in L`$, $`(G\circ F)(x,y)=(x,y)`$.
 
-Since $L=P$, this result also holds for every $(u,v)\in P$. Therefore,
+Since $`L=P`$, this result also holds for every $`(u,v)\in P`$. Therefore,
 
 ```math
 (F\circ G)(u,v)
@@ -2695,21 +2695,21 @@ Since $L=P$, this result also holds for every $(u,v)\in P$. Therefore,
 
 Thus,
 
-$$
+```math
 F\circ G=I_P
-$$
+```
 
 and
 
-$$
+```math
 G\circ F=I_L.
-$$
+```
 
-Therefore, $G=F^{-1}$, so $F$ is invertible. Hence, $F$ is a bijection.
+Therefore, $`G=F^{-1}`$, so $`F`$ is invertible. Hence, $`F`$ is a bijection.
 
 ### The Kernel
 
-Since $F$ is a bijection, we can safely rearrange the physical layout of `bTile` according to this mapping without losing or overwriting any values. The mapping also gives us the desired bank-access pattern for both `float4` reads from `bTile`, removing the bank conflicts.
+Since $`F`$ is a bijection, we can safely rearrange the physical layout of `bTile` according to this mapping without losing or overwriting any values. The mapping also gives us the desired bank-access pattern for both `float4` reads from `bTile`, removing the bank conflicts.
 
 With both the `aTile` and `bTile` logical-to-physical mappings complete, we can now apply them to the kernel. The final kernel is shown below:
 
@@ -2861,19 +2861,19 @@ The logical-to-physical mappings derived above are implemented in the `aTilePhys
 
 This kernel is still an exact-fit kernel, so it only works when the matrix dimensions are exactly divisible by the tile dimensions. Since
 
-$$
+```math
 TILE\_M = 128,\qquad TILE\_N = 128,\qquad TILE\_K = 32,
-$$
+```
 
 we require
 
-$$
+```math
 m \bmod 128 = 0,\qquad
 n \bmod 128 = 0,\qquad
 k \bmod 32 = 0.
-$$
+```
 
-This ensures that every output tile and every $K$-dimension tile is complete, so no boundary checks or partial tile handling are required.
+This ensures that every output tile and every $`K`$-dimension tile is complete, so no boundary checks or partial tile handling are required.
 
 A general version of this kernel is also included in the repository for matrix dimensions that are not exact multiples of the tile dimensions.
 
@@ -2887,9 +2887,9 @@ In the previous kernel, each thread computes an `8 x 8` tile of the output matri
 
 Since each thread block contains `16 x 16` threads and each warp contains 32 threads, each block contains
 
-$$
+```math
 \dfrac{16 \text{ threads} \times 16 \text{ threads}}{32 \text{ threads per warp}} = 8 \text{ warps}.
-$$
+```
 
 CUDA linearizes the threads in a block with the `x` dimension varying fastest. Therefore, each warp spans all 16 values of `tx` and two consecutive values of `ty`. The warps within the thread block are arranged as follows:
 
@@ -2927,15 +2927,15 @@ ty: +----------------------------------------------------------------+
 
 Each warp therefore covers a `2 x 16` region of threads within the block. Since each thread computes an `8 x 8` output tile, each warp computes an output tile of size
 
-$$
+```math
 (2 \cdot 8) \times (16 \cdot 8) = 16 \times 128.
-$$
+```
 
 The eight warps are stacked vertically within the block, so together they cover
 
-$$
+```math
 (8 \cdot 16) \times (16 \cdot 8) = 128 \times 128,
-$$
+```
 
 which matches the `128 x 128` output tile computed by the entire thread block.
 
@@ -2943,7 +2943,7 @@ Therefore, we already have warp tiling in the sense that each warp computes its 
 
 The reason explicitly controlling the warp tile can be useful is that threads in a warp execute instructions together. When the threads in a warp load values from shared memory, the addresses requested by those threads are therefore accessed together. Changing the shape of the output tile assigned to a warp changes which `aTile` and `bTile` values are requested together by the 32 threads.
 
-For example, with the current `16 x 128` warp tile, the warp spans only two thread tiles in the $y$ direction but 16 thread tiles in the $x$ direction. During the accumulation phase, when each thread loads the `aTile` and `bTile` values needed for the current `dotIdx` into `aReg` and `bReg`, many threads within the warp request the same values from `aTile`, while they request many different values from `bTile`.
+For example, with the current `16 x 128` warp tile, the warp spans only two thread tiles in the $`y`$ direction but 16 thread tiles in the $`x`$ direction. During the accumulation phase, when each thread loads the `aTile` and `bTile` values needed for the current `dotIdx` into `aReg` and `bReg`, many threads within the warp request the same values from `aTile`, while they request many different values from `bTile`.
 
 ```text
 Implicit warp tile: 16 x 128
@@ -3204,7 +3204,7 @@ The kernel shown above is the exact-fit version. A general version is also inclu
 
 `WARP_TILE_M = 128` and `WARP_TILE_N = 16` control the size of the output tile computed by each warp. Since each thread still computes an `8 x 8` output tile, a `128 x 16` warp tile contains
 
-$$
+```math
 \dfrac{128 \text{ output rows per warp tile}}
 {8 \text{ output rows per thread tile row}}
 \times
@@ -3213,31 +3213,31 @@ $$
 16 \text{ thread tile rows}
 \times
 2 \text{ thread tile columns}.
-$$
+```
 
 Since a warp contains 32 threads and each thread computes one thread tile, this gives exactly one `8 x 8` thread tile per thread.
 
 You'll also see that `warpId` and `warpThreadId` have been calculated. `warpId` is the ID of the warp within the block. There are
 
-$$
+```math
 \dfrac{256 \text{ threads per block}}{32 \text{ threads per warp}} = 8 \text{ warps per block}
-$$
+```
 
-Thus, $\text{warpId} \in \{0, 1, \dots, 7\}$, and it's calculated by
+Thus, $`\text{warpId} \in \{0, 1, \dots, 7\}`$, and it's calculated by
 
-$$
+```math
 \text{warpId} = \left\lfloor \dfrac{\text{tid}}{32} \right\rfloor
-$$
+```
 
 since each consecutive group of 32 thread IDs belongs to one warp.
 
 `warpThreadId` is the ID of a thread within its warp and is given by
 
-$$
+```math
 \text{warpThreadId} = \text{tid}\bmod32
-$$
+```
 
-Thus, $\text{warpThreadId} \in \{0, 1, \dots, 31\}$.
+Thus, $`\text{warpThreadId} \in \{0, 1, \dots, 31\}`$.
 
 Next, `warpX` and `warpY` give the coordinates of the warp tile within the block's `128 x 128` output tile. Each block computes
 
@@ -3247,27 +3247,27 @@ TILE_N = BLOCK_X x COLS_PER_THREAD = 16 x 8 = 128
 
 output columns, while each warp tile computes `WARP_TILE_N = 16` output columns. Therefore, the block contains
 
-$$
+```math
 \dfrac{128 \text{ output columns per block tile}}{16 \text{ output columns per warp tile}} = 8 \text{ warp tile columns per block tile}
-$$
+```
 
 Since `warpId` identifies one of the eight warps in the block, its warp tile coordinates are
 
-$$
+```math
 \text{warpY} =
 \left\lfloor
 \dfrac{\text{warpId}}{8}
 \right\rfloor
-$$
+```
 
 and
 
-$$
+```math
 \text{warpX} =
 \text{warpId}\bmod8.
-$$
+```
 
-Because $\text{warpId} \in \{0, 1, \dots, 7\}$, we have $\text{warpY} = 0$ and $\text{warpX} \in \{0, 1, \dots, 7\}$.
+Because $`\text{warpId} \in \{0, 1, \dots, 7\}`$, we have $`\text{warpY} = 0`$ and $`\text{warpX} \in \{0, 1, \dots, 7\}`$.
 
 So each `128 x 128` block output tile is divided into eight `128 x 16` warp tiles:
 
@@ -3282,29 +3282,29 @@ warpY: +----+----+----+----+----+----+----+----+
 
 Next, `warpThreadY` and `warpThreadX` give the coordinates of a thread tile within its warp tile. Each warp tile contains `WARP_TILE_N = 16` output columns, while each thread tile contains `COLS_PER_THREAD = 8` output columns. Therefore, there are
 
-$$
+```math
 \dfrac{16 \text{ output columns per warp tile}}
 {8 \text{ output columns per thread tile}} =
 2 \text{ thread tile columns per warp tile}.
-$$
+```
 
 Since `warpThreadId` is the linear ID of the thread within the warp, we can convert it into thread tile coordinates using
 
-$$
+```math
 \text{warpThreadY}
 = \left\lfloor
 \dfrac{\text{warpThreadId}}{2}
 \right\rfloor
-$$
+```
 
 and
 
-$$
+```math
 \text{warpThreadX} =
 \text{warpThreadId}\bmod2.
-$$
+```
 
-Thus, $\text{warpThreadY} \in \{0, 1, \dots, 15\}$ as $\text{warpThreadId} \in \{0, 1, \dots, 31\}$ and $\text{warpThreadX} \in \{0, 1\}$.
+Thus, $`\text{warpThreadY} \in \{0, 1, \dots, 15\}`$ as $`\text{warpThreadId} \in \{0, 1, \dots, 31\}`$ and $`\text{warpThreadX} \in \{0, 1\}`$.
 
 Each `128 x 16` warp tile therefore looks like:
 
@@ -3349,7 +3349,7 @@ warpThreadY: +----+----+
 
 The final indexing step is to calculate `threadTileStartYInBlock` and `threadTileStartXInBlock`. These are the starting coordinates of the thread's `8 x 8` output tile relative to the block's `128 x 128` output tile.
 
-For the $y$ coordinate, we first calculate the $y$ coordinate, relative to the block output tile, at which the warp's first thread tile begins.
+For the $`y`$ coordinate, we first calculate the $`y`$ coordinate, relative to the block output tile, at which the warp's first thread tile begins.
 
 ```text
 warpStartY = warpY * WARP_TILE_M
@@ -3357,9 +3357,9 @@ warpStartY = warpY * WARP_TILE_M
 
 For this particular `128 x 16` warp layout, `warpY = 0` and `WARP_TILE_M = 128` so
 
-$$
+```math
 \text{warpStartY}= 0\cdot128= 0.
-$$
+```
 
 Within the warp tile, the thread tile begins at
 
@@ -3367,7 +3367,7 @@ Within the warp tile, the thread tile begins at
 threadStartYInWarp = warpThreadY * ROWS_PER_THREAD.
 ```
 
-Thus, to get the starting $y$ coordinate of a particular thread tile relative to the entire block output tile, we add the $y$ coordinate of the first thread tile in the warp, `warpStartY`, to the starting $y$ coordinate of the current thread tile relative to that warp, `threadStartYInWarp`:
+Thus, to get the starting $`y`$ coordinate of a particular thread tile relative to the entire block output tile, we add the $`y`$ coordinate of the first thread tile in the warp, `warpStartY`, to the starting $`y`$ coordinate of the current thread tile relative to that warp, `threadStartYInWarp`:
 
 ```text
 threadTileStartYInBlock = warpStartY + threadStartYInWarp,
@@ -3401,7 +3401,7 @@ const uint32_t cyStart = ayBlockStart + ty * ROWS_PER_THREAD;
 const uint32_t cxStart = bxBlockStart + tx * COLS_PER_THREAD;
 ```
 
-Lastly, in the accumulator loops, you'll see we have replaced `ty * ROWS_PER_THREAD` and `tx * COLS_PER_THREAD` with `threadTileStartYInBlock` and `threadTileStartXInBlock` respectively. This makes sense because in the implicitly warp tiled kernel `ty * ROWS_PER_THREAD` is the thread tile $y$ start coordinate and `tx * COLS_PER_THREAD` is the thread tile $x$ start coordinate.
+Lastly, in the accumulator loops, you'll see we have replaced `ty * ROWS_PER_THREAD` and `tx * COLS_PER_THREAD` with `threadTileStartYInBlock` and `threadTileStartXInBlock` respectively. This makes sense because in the implicitly warp tiled kernel `ty * ROWS_PER_THREAD` is the thread tile $`y`$ start coordinate and `tx * COLS_PER_THREAD` is the thread tile $`x`$ start coordinate.
 
 That is the main change introduced by explicit warp tiling. The amount of work performed by the block, warp, and individual thread has not changed. The block still computes a `128 x 128` output tile, each warp still computes 2048 output values, and each thread still computes an `8 x 8` output tile. What has changed is how those thread tiles are grouped into warps and where each warp is placed within the block output tile.
 
@@ -3423,18 +3423,18 @@ Warp subtiling is an extension of warp tiling. Instead of treating the entire wa
 
 For example, in the previous kernel we chose `WARP_TILE_M = 128` and `WARP_TILE_N = 16`. We also had `BLOCK_X = BLOCK_Y = 16` and `ROWS_PER_THREAD = COLS_PER_THREAD = 8`, giving
 
-$$
+```math
 TILE\_M = TILE\_N = 16 \cdot 8 = 128.
-$$
+```
 
 Since each block contains
 
-$$
+```math
 \dfrac{\text{BLOCK\_X} \cdot \text{BLOCK\_Y}}
 {\text{THREADS\_PER\_WARP}} =
 \dfrac{256}{32} =
 8
-$$
+```
 
 warps, the `128 x 128` block tile is divided into eight `128 x 16` warp tiles:
 
@@ -3505,9 +3505,9 @@ warpY: +----+----+----+----+----+----+----+----+
 
 Now, let's subdivide each warp tile into a `2 x 2` grid of subtiles. At each step of the dot product, all 32 threads update their assigned thread tile in every subtile. Therefore, each subtile must contain exactly 32 thread tiles.
 
-Our warp tile computes `128 x 16` output elements. Dividing it into two subtiles along both the $x$ and $y$ dimensions gives each subtile a size of
+Our warp tile computes `128 x 16` output elements. Dividing it into two subtiles along both the $`x`$ and $`y`$ dimensions gives each subtile a size of
 
-$$
+```math
 \dfrac{\text{WARP\_TILE\_M}}{\text{NUM\_SUBTILES\_Y}}
 \times
 \dfrac{\text{WARP\_TILE\_N}}{\text{NUM\_SUBTILES\_X}} =
@@ -3515,13 +3515,13 @@ $$
 \times
 \dfrac{16}{2} =
 64 \times 8
-$$
+```
 
 output elements.
 
 If we kept `ROWS_PER_THREAD = COLS_PER_THREAD = 8`, each thread would still compute an `8 x 8` output tile. However, only
 
-$$
+```math
 \dfrac{\text{SUBTILE\_M}}{\text{ROWS\_PER\_THREAD}}
 \cdot
 \dfrac{\text{SUBTILE\_N}}{\text{COLS\_PER\_THREAD}} =
@@ -3529,7 +3529,7 @@ $$
 \cdot
 \dfrac{8}{8} =
 8
-$$
+```
 
 such thread tiles would fit inside a `64 x 8` subtile. This would only provide work for 8 of the 32 threads in the warp.
 
@@ -3542,7 +3542,7 @@ COLS_PER_THREAD = 4;
 
 Now each `64 x 8` subtile contains
 
-$$
+```math
 \dfrac{\text{SUBTILE\_M}}{\text{ROWS\_PER\_THREAD}}
 \cdot
 \dfrac{\text{SUBTILE\_N}}{\text{COLS\_PER\_THREAD}} =
@@ -3550,7 +3550,7 @@ $$
 \cdot
 \dfrac{8}{4} =
 32
-$$
+```
 
 thread tiles, giving exactly one `4 x 4` thread tile to each of the 32 threads in the warp.
 
@@ -3831,7 +3831,7 @@ constexpr uint32_t WARP_SUBTILES_PER_WARP_TILE_M = 2;
 constexpr uint32_t WARP_SUBTILES_PER_WARP_TILE_N = 2;
 ```
 
-these specify the number of subtiles within each warp tile along the $M$ ($y$) and $N$ ($x$) dimensions, respectively. These are the same `2 x 2` subdivisions shown in the previous set of diagrams.
+these specify the number of subtiles within each warp tile along the $`M`$ ($`y`$) and $`N`$ ($`x`$) dimensions, respectively. These are the same `2 x 2` subdivisions shown in the previous set of diagrams.
 
 Next,
 
@@ -3842,21 +3842,21 @@ constexpr uint32_t WARP_SUBTILE_N = WARP_TILE_N / WARP_SUBTILES_PER_WARP_TILE_N;
 
 define the size of each warp subtile. For our `128 x 16` warp tile,
 
-$$
+```math
 \text{WARP\_SUBTILE\_M} =
 \frac{\text{WARP\_TILE\_M}}{\text{WARP\_SUBTILES\_PER\_WARP\_TILE\_M}} =
 \frac{128}{2} =
 64
-$$
+```
 
 and
 
-$$
+```math
 \text{WARP\_SUBTILE\_N} =
 \frac{\text{WARP\_TILE\_N}}{\text{WARP\_SUBTILES\_PER\_WARP\_TILE\_N}} =
 \frac{16}{2} =
 8.
-$$
+```
 
 Therefore, each warp subtile computes a `64 x 8` region of the output.
 
@@ -3871,21 +3871,21 @@ describe the horizontal layout at two different levels of the tiling hierarchy.
 
 The number of warp tile columns within the block output tile is
 
-$$
+```math
 \text{WARP\_TILES\_PER\_BLOCK\_N} =
 \frac{\text{TILE\_N}}{\text{WARP\_TILE\_N}} =
 \frac{128}{16} =
 8.
-$$
+```
 
 Similarly, the number of thread tile columns within each warp subtile is
 
-$$
+```math
 \text{THREAD\_TILES\_PER\_WARP\_SUBTILE\_N} =
 \frac{\text{WARP\_SUBTILE\_N}}{\text{COLS\_PER\_THREAD\_TILE}} =
 \frac{8}{4} =
 2.
-$$
+```
 
 Therefore, `WARP_TILES_PER_BLOCK_N = 8` and `THREAD_TILES_PER_WARP_SUBTILE_N = 2`.
 
@@ -3896,7 +3896,7 @@ const uint32_t warpThreadY = warpThreadId / THREAD_TILES_PER_WARP_SUBTILE_N;
 const uint32_t warpThreadX = warpThreadId % THREAD_TILES_PER_WARP_SUBTILE_N;
 ```
 
-Since `THREAD_TILES_PER_WARP_SUBTILE_N = 2` and $\text{warpThreadId} \in \{0,1,\dots,31\}$, we get $\text{warpThreadY} \in \{0,1,\dots,15\}$ and $\text{warpThreadX} \in \{0,1\}$. Thus, the 32 threads are arranged as 16 thread tile rows and 2 thread tile columns within each warp subtile.
+Since `THREAD_TILES_PER_WARP_SUBTILE_N = 2` and $`\text{warpThreadId} \in \{0,1,\dots,31\}`$, we get $`\text{warpThreadY} \in \{0,1,\dots,15\}`$ and $`\text{warpThreadX} \in \{0,1\}`$. Thus, the 32 threads are arranged as 16 thread tile rows and 2 thread tile columns within each warp subtile.
 
 Next, you'll see we have:
 
@@ -3908,7 +3908,7 @@ __align__(BYTES_PER_FLOAT4) float acc[WARP_SUBTILES_PER_WARP_TILE_M]
                                      [ROWS_PER_THREAD_TILE][COLS_PER_THREAD_TILE] = {0.0f};
 ```
 
-These arrays now include the warp subtile dimensions because each thread contributes to every subtile within the warp tile. Since the warp tile is divided into two subtiles along the $M$ dimension and two along the $N$ dimension, each thread needs separate register storage for the values associated with each subtile.
+These arrays now include the warp subtile dimensions because each thread contributes to every subtile within the warp tile. Since the warp tile is divided into two subtiles along the $`M`$ dimension and two along the $`N`$ dimension, each thread needs separate register storage for the values associated with each subtile.
 
 `aReg` stores one set of `ROWS_PER_THREAD_TILE` values for each warp subtile row, while `bReg` stores one set of `COLS_PER_THREAD_TILE` values for each warp subtile column. The accumulator therefore needs both dimensions, since each combination of warp subtile row and column corresponds to a different output subtile.
 
@@ -3926,7 +3926,7 @@ for (uint32_t subtileY = 0; subtileY < WARP_SUBTILES_PER_WARP_TILE_M; subtileY++
 }
 ```
 
-Recall that `threadTileStartYInBlock` is the starting $y$ coordinate of the thread tile relative to the entire block output tile. In the warp subtiled kernel, this gives the thread's local position within the first warp subtile row.
+Recall that `threadTileStartYInBlock` is the starting $`y`$ coordinate of the thread tile relative to the entire block output tile. In the warp subtiled kernel, this gives the thread's local position within the first warp subtile row.
 
 To access the corresponding thread tile in each warp subtile row, we add
 
@@ -3938,7 +3938,7 @@ to `threadTileStartYInBlock`.
 
 For `subtileY = 0`, this offset is `0`, so we access the thread tile in the first warp subtile row. For `subtileY = 1`, the offset is `WARP_SUBTILE_M = 64`, moving the same thread position down 64 rows into the second warp subtile row.
 
-The same logic applies in the $x$ direction when loading from `bTile`:
+The same logic applies in the $`x`$ direction when loading from `bTile`:
 
 ```cuda
 #pragma unroll
@@ -3952,7 +3952,7 @@ for (uint32_t subtileX = 0; subtileX < WARP_SUBTILES_PER_WARP_TILE_N; subtileX++
 }
 ```
 
-Here, `threadTileStartXInBlock` gives the thread tile's starting $x$ coordinate relative to the block output tile. Adding
+Here, `threadTileStartXInBlock` gives the thread tile's starting $`x`$ coordinate relative to the block output tile. Adding
 
 ```text
 subtileX * WARP_SUBTILE_N
