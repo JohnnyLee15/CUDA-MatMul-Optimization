@@ -1,0 +1,2 @@
+# Requirements are optional and only used for plotting the benchmark results
+matplotlib==3.11.2

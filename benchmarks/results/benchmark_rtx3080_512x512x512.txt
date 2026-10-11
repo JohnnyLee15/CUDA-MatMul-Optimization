@@ -1,0 +1,154 @@
+Matrix Size: A(512 x 512) x B(512 x 512) -> C(512 x 512)
+
+============================================================
+Benchmarking GPU Naive
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.232ms
+Performance: 1154.82 GFLOPS
+============================================================
+
+============================================================
+Benchmarking GPU Shared Memory
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.125ms
+Performance: 2148.72 GFLOPS
+1.86x speed up over GPU Naive
+============================================================
+
+============================================================
+Benchmarking GPU 1D Register Tile
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.053ms
+Performance: 5080.31 GFLOPS
+2.36x speed up over GPU Shared Memory
+============================================================
+
+============================================================
+Benchmarking GPU 2D Register Tile
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.048ms
+Performance: 5637.51 GFLOPS
+1.11x speed up over GPU 1D Register Tile
+============================================================
+
+============================================================
+Benchmarking GPU Vectorized General
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.110ms
+Performance: 2440.82 GFLOPS
+0.43x speed up over GPU 2D Register Tile
+============================================================
+
+============================================================
+Benchmarking GPU Vectorized Exact Fit
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.078ms
+Performance: 3442.47 GFLOPS
+0.61x speed up over GPU 2D Register Tile
+============================================================
+
+============================================================
+Benchmarking GPU Resolve Bank Conflicts General
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.079ms
+Performance: 3393.45 GFLOPS
+1.39x speed up over GPU Vectorized General
+============================================================
+
+============================================================
+Benchmarking GPU Resolve Bank Conflicts Exact Fit
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.069ms
+Performance: 3883.61 GFLOPS
+1.13x speed up over GPU Vectorized Exact Fit
+============================================================
+
+============================================================
+Benchmarking GPU Warp Tiling General
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.079ms
+Performance: 3382.50 GFLOPS
+1.00x speed up over GPU Resolve Bank Conflicts General
+============================================================
+
+============================================================
+Benchmarking GPU Warp Tiling Exact Fit
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.070ms
+Performance: 3840.94 GFLOPS
+0.99x speed up over GPU Resolve Bank Conflicts Exact Fit
+============================================================
+
+============================================================
+Benchmarking GPU Warp Subtiling General
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.095ms
+Performance: 2832.46 GFLOPS
+0.83x speed up over GPU Resolve Bank Conflicts General
+============================================================
+
+============================================================
+Benchmarking GPU Warp Subtiling Exact Fit
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.068ms
+Performance: 3968.87 GFLOPS
+1.02x speed up over GPU Resolve Bank Conflicts Exact Fit
+============================================================
+
+============================================================
+Benchmarking GPU Autotune Exact Fit
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.069ms
+Performance: 3875.00 GFLOPS
+1.00x speed up over GPU Resolve Bank Conflicts Exact Fit
+============================================================
+
+============================================================
+Benchmarking cuBLAS SGEMM
+------------------------------------------------------------
+Warmup runs: 3
+Timed runs: 20
+Validation of output vs ground truth: PASS
+Avg duration: 0.043ms
+Performance: 6205.74 GFLOPS
+1.60x speed up over GPU Autotune Exact Fit
+============================================================

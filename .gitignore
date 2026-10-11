@@ -4,3 +4,4 @@
 dump_repo_sources.sh
 /tmp/
 __pycache__/
+/.venv/

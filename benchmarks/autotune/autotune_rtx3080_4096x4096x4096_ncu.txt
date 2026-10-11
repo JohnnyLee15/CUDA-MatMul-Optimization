@@ -1,0 +1,206 @@
+Section: GPU Speed Of Light Throughput
+    ----------------------- ----------- -------------
+    Metric Name             Metric Unit  Metric Value
+    ----------------------- ----------- -------------
+    DRAM Frequency                  Ghz          9.24
+    SM Frequency                    Ghz          1.79
+    Elapsed Cycles                cycle    11,091,109
+    Memory Throughput                 %         47.37
+    DRAM Throughput                   %         19.41
+    Duration                         ms          6.19
+    L1/TEX Cache Throughput           %         50.29
+    L2 Cache Throughput               %         29.14
+    SM Active Cycles              cycle 10,383,532.40
+    Compute (SM) Throughput           %         76.97
+    ----------------------- ----------- -------------
+
+    OPT   Compute is more heavily utilized than Memory: Look at the Compute Workload Analysis section to see what the
+          compute pipelines are spending their time doing. Also, consider whether any computation is redundant and
+          could be reduced or moved to look-up tables.
+
+    Section: GPU Speed Of Light Roofline Chart (Overview)
+    INF   The ratio of peak float (FP32) to double (FP64) performance on this device is 64:1. The workload achieved 72%
+          of this device's FP32 peak performance and 0% of its FP64 peak performance. See the Profiling Guide
+          (https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#roofline) for more details on roofline
+          analysis.
+
+    Section: PM Sampling
+    ------------------------- ----------- ------------
+    Metric Name               Metric Unit Metric Value
+    ------------------------- ----------- ------------
+    Maximum Buffer Size             Mbyte        34.21
+    Maximum Sampling Interval          us            2
+    # Pass Groups                                    3
+    ------------------------- ----------- ------------
+
+    Section: Compute Workload Analysis
+    -------------------- ----------- ------------
+    Metric Name          Metric Unit Metric Value
+    -------------------- ----------- ------------
+    Executed Ipc Active   inst/cycle         3.27
+    Executed Ipc Elapsed  inst/cycle         3.08
+    Issue Slots Busy               %        76.97
+    Issued Ipc Active     inst/cycle         3.27
+    SM Busy                        %        76.97
+    -------------------- ----------- ------------
+
+    OPT   FMA is the highest-utilized pipeline (72.5%) based on elapsed cycles in the workload, taking into account the
+          rates of its different instructions. It is the logical aggregation of FMA Heavy and FMA Lite,. It's
+          dominated by its FMA Lite sub-pipeline. The pipeline is well-utilized, but might become a bottleneck if more
+          work is added. Based on the number of executed instructions, the highest utilized pipeline (73.2%) is FMA
+          Lite. It performs FP32 arithmetic (FADD, FMUL, FMA) and FP16 arithmetic (HADD2, HMUL2, HFMA2) and is part of
+          the aggregated pipe FMA. Comparing the two, the overall pipeline utilization appears to be caused by
+          frequent, low-latency instructions. See the Profiling Guide
+          (https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#metrics-decoder) or hover over the
+          pipeline name to understand the workloads handled by each pipeline. The Instruction Statistics section shows
+          the mix of executed instructions for this workload.
+
+    Section: Memory Workload Analysis
+    --------------------------------------- ----------- ------------
+    Metric Name                             Metric Unit Metric Value
+    --------------------------------------- ----------- ------------
+    Local Memory Spilling Requests                                 0
+    Local Memory Spilling Request Overhead            %            0
+    L2 Sector Promotion Misses                        %            0
+    Shared Memory Spilling Requests                                0
+    Shared Memory Spilling Request Overhead           %            0
+    Memory Throughput                           Gbyte/s       143.52
+    Mem Busy                                          %        47.37
+    Max Bandwidth                                     %        40.36
+    L1/TEX Hit Rate                                   %        10.96
+    L2 Persisting Size                            Kbyte       983.04
+    L2 Compression Success Rate                       %            0
+    L2 Compression Ratio                                           0
+    L2 Compression Input Sectors                 sector            0
+    L2 Hit Rate                                       %        79.66
+    Mem Pipes Busy                                    %        34.73
+    --------------------------------------- ----------- ------------
+
+    Section: Scheduler Statistics
+    ---------------------------- ----------- ------------
+    Metric Name                  Metric Unit Metric Value
+    ---------------------------- ----------- ------------
+    One or More Eligible                   %        81.60
+    Issued Warp Per Scheduler                        0.82
+    No Eligible                            %        18.40
+    Active Warps Per Scheduler          warp         1.99
+    Eligible Warps Per Scheduler        warp         1.38
+    ---------------------------- ----------- ------------
+
+    Section: Warp State Statistics
+    ---------------------------------------- ----------- ------------
+    Metric Name                              Metric Unit Metric Value
+    ---------------------------------------- ----------- ------------
+    Warp Cycles Per Issued Instruction             cycle         2.44
+    Warp Cycles Per Executed Instruction           cycle         2.44
+    Avg. Active Threads Per Warp                                   32
+    Avg. Not Predicated Off Threads Per Warp                    31.99
+    ---------------------------------------- ----------- ------------
+
+    Section: Instruction Statistics
+    ---------------------------------------- ----------- -------------
+    Metric Name                              Metric Unit  Metric Value
+    ---------------------------------------- ----------- -------------
+    Local Memory Spilling Requests                  byte             0
+    Shared Memory Spilling Requests                 byte             0
+    Avg. Executed Instructions Per Scheduler        inst  8,484,743.53
+    Executed Instructions                           inst 2,307,850,240
+    Avg. Issued Instructions Per Scheduler          inst  8,484,786.59
+    Issued Instructions                             inst 2,307,861,952
+    ---------------------------------------- ----------- -------------
+
+    Section: Launch Statistics
+    -------------------------------- --------------- ---------------
+    Metric Name                          Metric Unit    Metric Value
+    -------------------------------- --------------- ---------------
+    Block Size                                                   128
+    Function Cache Configuration                     CachePreferNone
+    Grid Size                                                  1,024
+    Registers Per Thread             register/thread             213
+    Shared Memory Configuration Size           Kbyte           65.54
+    Driver Shared Memory Per Block       Kbyte/block            1.02
+    Dynamic Shared Memory Per Block       byte/block               0
+    Static Shared Memory Per Block       Kbyte/block           16.38
+    # SMs                                         SM              68
+    Stack Size                                                 1,024
+    Threads                                   thread         131,072
+    # TPCs                                                        34
+    Enabled TPC IDs                                              all
+    Uses Green Context                                             0
+    Waves Per SM                                                7.53
+    -------------------------------- --------------- ---------------
+
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Block Limit SM                        block           16
+    Block Limit Registers                 block            2
+    Block Limit Shared Mem                block            3
+    Block Limit Warps                     block           12
+    Theoretical Active Warps per SM        warp            8
+    Theoretical Occupancy                     %        16.67
+    Achieved Occupancy                        %        16.59
+    Achieved Active Warps Per SM           warp         7.96
+    ------------------------------- ----------- ------------
+
+    OPT   Est. Local Speedup: 83.33%
+          The 2.00 theoretical warps per scheduler this kernel can issue according to its occupancy are below the
+          hardware maximum of 12. This kernel's theoretical occupancy (16.7%) is limited by the number of required
+          registers.
+
+    Section: GPU and Memory Workload Distribution
+    -------------------------- ----------- -------------
+    Metric Name                Metric Unit  Metric Value
+    -------------------------- ----------- -------------
+    Average DRAM Active Cycles       cycle    11,097,016
+    Total DRAM Elapsed Cycles        cycle   571,699,200
+    Average L1 Active Cycles         cycle 10,383,532.40
+    Total L1 Elapsed Cycles          cycle   749,642,234
+    Average L2 Active Cycles         cycle 10,259,451.35
+    Total L2 Elapsed Cycles          cycle   421,330,520
+    Average SM Active Cycles         cycle 10,383,532.40
+    Total SM Elapsed Cycles          cycle   749,642,234
+    Average SMSP Active Cycles       cycle 10,397,913.20
+    Total SMSP Elapsed Cycles        cycle 2,998,568,936
+    -------------------------- ----------- -------------
+
+    OPT   Est. Speedup: 5.43%
+          One or more SMs have a much higher number of active cycles than the average number of active cycles.
+          Additionally, other SMs have a much lower number of active cycles than the average number of active cycles.
+          Maximum instance value is 5.77% above the average, while the minimum instance value is 7.47% below the
+          average.
+    ----- --------------------------------------------------------------------------------------------------------------
+    OPT   Est. Speedup: 5.681%
+          One or more SMSPs have a much higher number of active cycles than the average number of active cycles.
+          Additionally, other SMSPs have a much lower number of active cycles than the average number of active
+          cycles. Maximum instance value is 6.02% above the average, while the minimum instance value is 7.70% below
+          the average.
+    ----- --------------------------------------------------------------------------------------------------------------
+    OPT   Est. Speedup: 5.43%
+          One or more L1 Slices have a much higher number of active cycles than the average number of active cycles.
+          Additionally, other L1 Slices have a much lower number of active cycles than the average number of active
+          cycles. Maximum instance value is 5.77% above the average, while the minimum instance value is 7.47% below
+          the average.
+
+    Section: Source Counters
+    ------------------------- ----------- ------------
+    Metric Name               Metric Unit Metric Value
+    ------------------------- ----------- ------------
+    Branch Instructions Ratio           %         0.00
+    Branch Instructions              inst    2,101,248
+    Branch Efficiency                   %          100
+    Avg. Divergent Branches      branches            0
+    ------------------------- ----------- ------------
+
+============================================================
+Shared Memory Bank Conflicts — Separate Counter Measurement
+============================================================
+
+    Section: Command line profiler metrics
+    -------------------------------------------------------- ----------- ------------
+    Metric Name                                              Metric Unit Metric Value
+    -------------------------------------------------------- ----------- ------------
+    l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum                        0
+    l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum                        0
+    -------------------------------------------------------- ----------- ------------

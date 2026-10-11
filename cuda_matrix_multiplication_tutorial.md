@@ -1002,7 +1002,7 @@ const uint32_t cxStart = bxBlockStart + tx * COLS_PER_THREAD;
 
 The row calculation is the same idea as in the 1D register tiled kernel. `ayBlockStart = blockIdx.y * TILE_M` is an index with respect to the output matrix, so it moves us to the first output row covered by the current thread block. From there, `ty * ROWS_PER_THREAD` moves to the first output row assigned to the current thread row within that block.
 
-The column calculation follows the same pattern. `bxBlockStart = blockIdx.x * TILE_N` moves to the first output column covered by the current thread block, while `tx * COLS_PER_THREAD` moves to the first output column assigned to the current thread column within that block. Therefore, each thread begins at `(cyStart, cxStart)` and computes a `ROWS_PER_THREAD × COLS_PER_THREAD = 4 x 4` patch of the output matrix.
+The column calculation follows the same pattern. `bxBlockStart = blockIdx.x * TILE_N` moves to the first output column covered by the current thread block, while `tx * COLS_PER_THREAD` moves to the first output column assigned to the current thread column within that block. Therefore, each thread begins at `(cyStart, cxStart)` and computes a `ROWS_PER_THREAD x COLS_PER_THREAD = 4 x 4` patch of the output matrix.
 
 Next, we declare the registers used during the partial dot product calculations:
 
@@ -4061,4 +4061,92 @@ Coming later.
 
 ## Benchmarks
 
-Coming very soon.
+### Setup
+
+Finally, we can evaluate how the different optimizations affect performance. All kernels were benchmarked on an NVIDIA RTX 3080. The CUDA code was compiled with `-O3` to enable the highest level of compiler optimization and with `-arch=sm_86`, which targets the RTX 3080's Ampere architecture.
+
+Five square matrix sizes were used for benchmarking:
+
+`512 x 512`, `1024 x 1024`, `2048 x 2048`, `4096 x 4096`, and `8192 x 8192`.
+
+For each benchmark, the kernel was first executed for three warmup runs, followed by 20 timed runs. The reported execution time is the average of those 20 runs.
+
+Every output was validated against the [naive implementation](#optimization-1-global-memory-coalescing) introduced in the memory coalescing section to ensure that each optimized kernel produced the correct result.
+
+The final autotuned kernel was also compared against cuBLAS. The autotuning search itself was performed specifically for the `4096 x 4096` matrix size. Although the same process could be repeated independently for the other matrix sizes, only `4096 x 4096` was autotuned for this project to keep the search manageable and the comparison straightforward.
+
+### Results
+
+The table below compares the throughput of each implementation across five square matrix sizes, where `M = N = K`. Performance is reported in GFLOPS (billions of floating point operations per second), so higher values indicate better performance. All reported outputs passed validation against the reference implementation.
+
+The autotuned kernel uses the configuration selected specifically for `4096 x 4096` across all five tested matrix sizes.
+
+| Kernel | 512 x 512 | 1024 x 1024 | 2048 x 2048 | 4096 x 4096 | 8192 x 8192 |
+|---|---:|---:|---:|---:|---:|
+| GPU Naive | 1154.82 | 1736.63 | 1769.11 | 1786.95 | 1713.45 |
+| GPU Shared Memory | 2148.72 | 2407.20 | 2478.81 | 2510.86 | 2403.34 |
+| GPU 1D Register Tile | 5080.31 | 5991.01 | 6244.78 | 6290.46 | 6191.67 |
+| GPU 2D Register Tile | 5637.51 | 12189.20 | 11929.19 | 11968.23 | 12029.17 |
+| GPU Vectorized General | 2440.82 | 10650.85 | 13376.29 | 15354.08 | 15848.45 |
+| GPU Vectorized Exact Fit | 3442.47 | 8149.03 | 14594.59 | 16094.22 | 16444.28 |
+| GPU Resolve Bank Conflicts General | 3393.45 | 9979.31 | 15583.52 | 16131.16 | 16674.55 |
+| GPU Resolve Bank Conflicts Exact Fit | 3883.61 | 14553.45 | 16212.22 | 17958.19 | 18246.56 |
+| GPU Warp Tiling General | 3382.50 | 10713.42 | 15673.78 | 16583.40 | 17086.89 |
+| GPU Warp Tiling Exact Fit | 3840.94 | 7665.03 | 19944.38 | 18780.90 | 19156.50 |
+| GPU Warp Subtiling General | 2832.46 | 11158.03 | 10158.47 | 11810.11 | 11741.29 |
+| GPU Warp Subtiling Exact Fit | 3968.87 | 14624.49 | 19254.28 | 18673.51 | 18814.70 |
+| GPU Autotune Exact Fit | 3875.00 | 15448.63 | 22424.94 | 20475.16 | 20051.85 |
+| cuBLAS SGEMM | 6205.74 | 15984.39 | 23545.32 | 21647.67 | 21742.20 |
+
+The following plot shows how throughput changes as the matrix size increases:
+
+![Matrix multiplication throughput on an RTX 3080](benchmarks/plots/matmul_throughput_rtx3080.png)
+
+The improvements become especially significant at the larger matrix sizes. For `4096 x 4096`, the autotuned kernel achieves approximately `11.46x` the throughput of the naive kernel and reaches `94.6%` of cuBLAS throughput. It is also the fastest custom implementation at every tested size from `1024 x 1024` through `8192 x 8192`.
+
+However, adding another optimization does not always result in better performance. At `512 x 512`, the 2D register-tiled kernel is still the fastest custom implementation, outperforming both the vectorized and autotuned kernels. The vectorized implementations also perform worse than 2D register tiling at `1024 x 1024`, but begin to outperform it as the matrix size increases.
+
+Warp subtiling shows the same effect. The manually selected warp-subtiled configurations do not consistently outperform the previous warp-tiled kernels, even though warp subtiling introduces another level of control over how work is distributed within each warp.
+
+These results demonstrate why benchmarking and autotuning are so important in GPU optimization. An optimization that improves one aspect of the kernel does not necessarily improve the overall execution time, and the best configuration can change depending on the problem size.
+
+The complete benchmark outputs are available in the [benchmark results](benchmarks/results/) directory.
+
+### Profiling the Autotuned Kernel
+
+To better understand how the final kernel uses the GPU, we profiled it with NVIDIA Nsight Compute for `M = N = K = 4096`.
+
+The [autotune directory](benchmarks/autotune/) contains the full ranking of 22,573 successfully benchmarked configurations in the [autotuning results](benchmarks/autotune/autotune_rtx3080_4096x4096x4096.txt), along with the [Nsight Compute profile](benchmarks/autotune/autotune_rtx3080_4096x4096x4096_ncu.txt).
+
+The main profiling results are:
+
+| Metric | Result |
+|---|---:|
+| Achieved FP32 peak performance | 72% |
+| Compute throughput | 76.97% |
+| FMA pipeline utilization | 72.5% |
+| Registers per thread | 213 |
+| Theoretical occupancy | 16.67% |
+| Achieved occupancy | 16.59% |
+| Static shared memory per block | 16 KiB |
+| Local and shared memory spilling | 0 |
+| Shared memory load bank conflicts | 0 |
+| Shared memory store bank conflicts | 0 |
+
+The kernel achieves high arithmetic throughput. Nsight reports that it reaches approximately 72% of the GPU's FP32 peak performance, while the FMA pipeline is utilized at 72.5%. A separate measurement of the shared memory bank conflict counters also confirmed zero conflicts for both loads and stores.
+
+One thing that stands out is the relatively low occupancy. Each thread uses 213 registers, which limits each SM to two resident blocks. Since each block contains four warps, this allows eight resident warps out of the hardware maximum of 48, giving a theoretical occupancy of 16.67%.
+
+However, low occupancy does not necessarily mean poor performance. Occupancy describes how many warps can be resident on an SM at once, while compute utilization describes how heavily the GPU's execution resources are being used. In this kernel, each thread computes multiple output values using several independent accumulators. This increases register usage, but it also provides instruction level parallelism and allows loaded values to be reused across many multiply-add operations.
+
+This creates another optimization tradeoff. Reducing the amount of work performed by each thread could lower register usage and allow higher occupancy, but it could also reduce data reuse and instruction level parallelism. Similarly, forcing the compiler to use fewer registers could cause spilling into local memory. The autotuner tested many different configurations with different tile sizes and register requirements, and the highest-performing configuration still ended up using 213 registers per thread. NVIDIA discusses this general tradeoff in the [CUDA Best Practices Guide](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#occupancy).
+
+The profile still shows opportunities to investigate better latency hiding. Prefetching, double buffering, and asynchronous copies could allow data for the next tile to be loaded while computation is still being performed on the current tile.
+
+The current kernel performs its arithmetic using standard FP32 fused multiply-add (FMA) instructions. Although the source code is written using expressions such as `acc += a * b`, the CUDA compiler can fuse the multiplication and addition into a single FMA instruction. Inspection of the generated machine code confirms that the accumulator updates use FP32 fused multiply-add instructions. Nsight Compute reports the FMA pipeline as the most heavily utilized arithmetic pipeline.
+
+Tensor Cores are another major optimization that could be explored. Unlike the standard FP32 FMA instructions used by the current kernel, Tensor Cores provide specialized hardware for performing matrix multiply-accumulate operations. Reworking the kernel around Tensor Cores could potentially provide substantially higher throughput, although it would require a different tiling and accumulation strategy and introduce additional precision considerations.
+
+As with the other optimizations in this project, the actual performance benefit of these techniques would need to be determined through benchmarking.
+
+The performance comparisons in the previous section use the normal benchmark averages. Nsight's profiled launch duration is a separate measurement and is therefore not used in those comparisons.
