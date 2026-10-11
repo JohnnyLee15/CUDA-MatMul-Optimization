@@ -71,7 +71,7 @@ __device__ __forceinline__ TileCoord bTilePhysicalCoord(uint32_t logicalX, uint3
 }
 
 
-__global__ void matMulCudaWarpTilingExactFitKernel (
+__global__ void matMulCudaAutotuneExactFitKernel (
     const float* __restrict__ a,
     const float* __restrict__ b,
     float* __restrict__ c,
@@ -211,7 +211,7 @@ bool matMulAutotuneCanLaunch() {
 
     CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
         &activeBlocksPerSm,
-        matMulCudaWarpTilingExactFitKernel,
+        matMulCudaAutotuneExactFitKernel,
         blockSize,
         0
     ));
@@ -236,6 +236,6 @@ void matMulAutotuneLaunch(const Matrix &a, const Matrix &b, Matrix &c) {
 
     dim3 blockDim(BLOCK_X, BLOCK_Y);
 
-    matMulCudaWarpTilingExactFitKernel<<<gridDim, blockDim>>>(a.data(), b.data(), c.data(), m, n, k);
+    matMulCudaAutotuneExactFitKernel<<<gridDim, blockDim>>>(a.data(), b.data(), c.data(), m, n, k);
     CUDA_CHECK(cudaGetLastError());
 }

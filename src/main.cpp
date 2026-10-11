@@ -17,6 +17,7 @@
 #include "cuda/matMulCudaWarpTilingExactFit.h"
 #include "cuda/matMulCudaWarpSubtilingGeneral.h"
 #include "cuda/matMulCudaWarpSubtilingExactFit.h"
+#include "cuda/matMulCudaAutotuneExactFit.h"
 #include "cuda/matMulCublas.h"
 #include "matrix.h"
 #include "device.h"
@@ -140,12 +141,17 @@ int main() {
         "GPU Warp Subtiling Exact Fit", gpuResolveBankConflictsExactFitTime, "GPU Resolve Bank Conflicts Exact Fit"
     );
 
+    float gpuAutotuneExactFitTime = Benchmark::benchmarkMatMul(
+        aGpu, bGpu, cGpu, gtGpu,
+        matMulCudaAutotuneExactFitLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA,
+        "GPU Autotune Exact Fit", gpuResolveBankConflictsExactFitTime, "GPU Resolve Bank Conflicts Exact Fit"
+    );
 
     matMulCublasInit();
     Benchmark::benchmarkMatMul(
         aGpu, bGpu, cGpu, gtGpu,
         matMulCublasLaunch, NUM_RUNS_CUDA, NUM_WARM_UPS_CUDA, "cuBLAS SGEMM",
-        gpuWarpTilingExactFitTime, "GPU Warp Tiling Exact Fit"
+        gpuAutotuneExactFitTime, "GPU Autotune Exact Fit"
     );
     matMulCublasShutdown();
 
