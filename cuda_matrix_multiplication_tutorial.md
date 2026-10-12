@@ -4058,6 +4058,28 @@ Changing any one of these values can affect thread-level work, register usage, s
 
 After benchmarking the remaining launchable configurations, the autotuner selects the configuration with the lowest execution time. The best-performing kernel found by the autotuner is included in the final benchmark results.
 
+For `M = N = K = 4096` on the RTX 3080, the winning sweep parameters were:
+
+```python
+BLOCK_X = 16
+BLOCK_Y = 8
+
+ROWS_PER_THREAD_TILE = 8
+COLS_PER_THREAD_TILE = 4
+
+WARP_SUBTILES_PER_WARP_TILE_M = 2
+WARP_SUBTILES_PER_WARP_TILE_N = 2
+
+TILE_K = 16
+ACC_LOOP_UNROLL = 32
+
+THREAD_TILES_PER_WARP_SUBTILE_N = 4
+```
+
+These values produce a `128 x 128` block output tile and a `128 x 32` warp tile. Each warp tile is divided into a `2 x 2` grid of `64 x 16` subtiles, with each thread computing an `8 x 4` thread tile within each subtile.
+
+The complete winning kernel is available in [src/cuda/matMulCudaAutotuneExactFit.cu](src/cuda/matMulCudaAutotuneExactFit.cu).
+
 ## Optimization 10: Double Buffering and Asynchronous Copies
 
 Coming later.
