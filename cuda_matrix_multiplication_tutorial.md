@@ -2,7 +2,7 @@
 
 This tutorial follows the process of optimizing matrix multiplication on a CUDA GPU. We start with a straightforward kernel and improve it one step at a time, focusing on how threads access memory, reuse data, and divide up the calculation.
 
-We begin with CUDA indexing and warps, then move through coalescing, shared memory, register tiling, vectorization, and shared memory bank conflicts. Each section builds on the earlier kernels and explains the reason for the next change.
+We begin with CUDA indexing and warps, then move through coalescing, shared memory, register tiling, vectorization, shared memory bank conflicts, warp tiling and subtiling, and autotuning. Each section builds on the earlier kernels and explains the reason for the next change.
 
 ## Contents
 
@@ -74,7 +74,7 @@ i = (z * (X * Y)) + (y * X) + x = (z * Y + y) * X + x
 
 Each plane contains `X * Y` elements. Multiplying that by `z` skips the planes before the current plane. Then `y * X` skips the rows before the current row within our current plane. Finally, adding `x` moves us to the desired element within that row.
 
-Now, we go from flat index to coordinates. Given `i`:
+Now, we go from a flat index to coordinates. Given `i`:
 
 ```text
 x = i % X
@@ -134,7 +134,7 @@ These choices also need to satisfy the GPU’s per block thread limit.
 
 With 64 threads per block, filling all 48 warps would require `1536 / 64 = 24` blocks. However, only 16 blocks can reside on the SM, giving `(64 * 16) / 32 = 32` resident warps or `32 / 48 = 2 / 3 = 66.6..%` occupancy.
 
-With 544 threads per block, filling all 1536 thread positions would require `1536 / 544 = 2.82..` blocks. However, `0.82..` of a block cannot reside on the SM, only whole blocks can, thus, only 2 blocks reside on the SM, resulting in `(544 * 2) / 32 = 34` resident warps or about `71%` occupancy.
+With 544 threads per block, filling all 1536 thread positions would require `1536 / 544 = 2.82..` blocks. However, only whole blocks can reside on the SM. Thus, only 2 blocks reside on the SM, resulting in `(544 * 2) / 32 = 34` resident warps or about `71%` occupancy.
 
 Maximum occupancy is not always the fastest choice. This example only shows how block size interacts with the block and warp limits.
 
@@ -150,7 +150,7 @@ Memory coalescing refers to the GPU combining memory requests from threads in a 
 
 Precisely speaking, coalescing happens for the active threads in **one** warp, executing **one** memory instruction, where the GPU groups memory requests from threads within the warp into as few memory transactions as possible. Requests from different warps are not combined into the same memory instruction and are therefore coalesced separately, even if adjacent threads from different neighbouring warps access adjacent global memory. Separate memory instructions, such as loading from `ptr *a` and `ptr *b`, are analyzed separately, to see if the warp's memory access is coalesced.
 
-A memory instruction happens at the warp level and tells threads in a warp to load or store data. A memory transaction is a logical memory system operation used to serve an instruction given to a warp. One instruction can require multiple transactions, depending on the addresses requested by the threads. Thus, the sequence is.
+A memory instruction happens at the warp level and tells threads in a warp to load or store data. A memory transaction is a logical memory system operation used to serve an instruction given to a warp. One instruction can require multiple transactions, depending on the addresses requested by the threads. Thus, the sequence is:
 
 1. Warp executes a memory instruction
 2. Each active thread/lane computes the address it needs
@@ -188,7 +188,7 @@ Therefore:
 
 Now let's go through a precise example.
 
-Say we have an array `a` of 8 floats that starts at a 32 byte aligned address. We launch one block containing 8 threads, so the block is scheduled as one warp with 8 active threads and 24 unused thread positions. Assume we have a kernel that looks like.
+Say we have an array `a` of 8 floats that starts at a 32 byte aligned address. We launch one block containing 8 threads, so the block is scheduled as one warp with 8 active threads and 24 unused thread positions. Consider the following illustrative kernel:
 
 ```cuda
 __global__ void read(const float* __restrict__ a, uint32_t n) {
@@ -199,7 +199,9 @@ __global__ void read(const float* __restrict__ a, uint32_t n) {
 }
 ```
 
-The expression `a[i]` corresponds to a **single** memory load instruction issued for the warp. Each of the 8 active threads executes that same instruction and generates one 4 byte memory request:
+This example illustrates the access pattern. In an actual kernel, the loaded value must be used in a computation that affects the output. Otherwise, the compiler can remove the unused load.
+
+Assuming the loaded value is used, the expression `a[i]` corresponds to a **single** memory load instruction issued for the warp. Each of the 8 active threads executes that same instruction and generates one 4 byte memory request:
 
 ```text
 thread 0 → a[0]
@@ -391,7 +393,7 @@ The input matrices are `a` and `b`, and the output matrix is `c`. Their dimensio
 
 Now, assume `BLOCK_X = BLOCK_Y = TILE_K = 16`. Thus, each thread block contains `BLOCK_Y * BLOCK_X = 256` threads.
 
-Each thread is assigned to calculate one element of `c` specifically at index `c[cy * n + cx] == c[cy][cx]`
+Each thread is assigned to calculate one element of `c` specifically at index `c[cy * n + cx] == c[cy][cx]`.
 
 Now consider an output row in `c`. Each element
 
@@ -494,7 +496,7 @@ if (cy < m && cx < n) {
 }
 ```
 
-The next optimization shifts some of the work from thread level parallelism to per thread computation, allowing each thread to reuse loaded values across multiple outputs elements of `c`.
+The next optimization shifts some of the work from thread level parallelism to per thread computation, allowing each thread to reuse loaded values across multiple output elements of `c`.
 
 ## Optimization 3: 1D Register Tiling
 
@@ -589,7 +591,7 @@ The input matrices are `a` and `b`, and the output matrix is `c`. Their dimensio
 - `b`: `k` rows and `n` columns
 - `c`: `m` rows and `n` columns
 
-Since `BLOCK_X = BLOCK_Y = 16`. Thus, each thread block contains `BLOCK_Y * BLOCK_X = 256` threads.
+Since `BLOCK_X = BLOCK_Y = 16`, each thread block contains `BLOCK_Y * BLOCK_X = 256` threads.
 
 Each thread is assigned to calculate `ROWS_PER_THREAD = 8` elements of `c`, all within the same output column `cx`:
 
@@ -605,7 +607,7 @@ At first, this kernel may look quite different from the shared memory kernel, bu
 The shared memory strategy remains the same. The block still moves through the k dimension in chunks of `TILE_K = 16`, cooperatively loading pieces of `a` and `b` into shared memory before computing partial dot products.
 
 However, because each thread now computes eight output rows instead of one, the block computes more rows of `c` at once. With
-`BLOCK_Y = 16` and `ROWS_PER_THREAD = 8` the block computes `16 * 8 = 128` output rows.
+`BLOCK_Y = 16` and `ROWS_PER_THREAD = 8`, the block computes `16 * 8 = 128` output rows.
 
 Therefore, instead of loading a `16 x 16` tile from `a`, the block now loads a `128 x 16` tile from a. The `b` tile remains `16 x 16`, because the block still computes 16 output columns.
 
@@ -626,7 +628,7 @@ __shared__ float bTile[TILE_K][BLOCK_X];
 
 ```
 
-Since `TILE_M = BLOCK_Y * ROWS_PER_THREAD = 16 * 8 = 128` aTile has dimensions `128 x 16`. `bTile` has dimensions `16 x 16`. `aTile` is larger than in the previous shared memory kernel because each thread now computes eight output rows. Therefore, instead of loading one element of `aTile` per `k`-tile iteration as in the previous kernel, each thread now loads eight elements, one from each of the eight rows assigned to it.
+Since `TILE_M = BLOCK_Y * ROWS_PER_THREAD = 16 * 8 = 128`, `aTile` has dimensions `128 x 16`. `bTile` has dimensions `16 x 16`. `aTile` is larger than in the previous shared memory kernel because each thread now computes eight output rows. Therefore, instead of loading one element of `aTile` per `k`-tile iteration as in the previous kernel, each thread now loads eight elements, one from each of the eight rows assigned to it.
 
 Next, we get the thread indices within the block:
 
@@ -635,7 +637,7 @@ uint32_t ty = threadIdx.y;
 uint32_t tx = threadIdx.x;
 ```
 
-Since the block is `16 x 16`, therefore `ty = 0, ..., 15`, and `tx = 0, ..., 15`.
+Since the block is `16 x 16`, `ty = 0, ..., 15`, and `tx = 0, ..., 15`.
 
 We then calculate the first output row and output column assigned to the thread:
 
@@ -656,7 +658,7 @@ ty = 15 → rows 120, ..., 127
 
 Adding this offset to the starting row of the block gives the global starting row assigned to the thread.
 
-The output column is calculated normally `uint32_t cx = blockIdx.x * blockDim.x + tx;`. Neighboring `tx` values therefore correspond to neighboring output columns, which preserves the coalesced write pattern when the final results are written to c.
+The output column is calculated as `uint32_t cx = blockIdx.x * blockDim.x + tx;`. Neighboring `tx` values therefore correspond to neighboring output columns, which preserves the coalesced write pattern when the final results are written to `c`.
 
 Next, we allocate one accumulator for each output element assigned to the thread:
 
@@ -934,7 +936,7 @@ __shared__ float aTile[TILE_M][TILE_K];
 __shared__ float bTile[TILE_K][TILE_N];
 ```
 
-The shape of `aTile` is still determined by the number of output rows computed by the block and the number of elements processed along the `k` dimension during each tile iteration. Therefore `aTile` has dimensions `(BLOCK_Y * ROWS_PER_THREAD) x TILE_K = (16 * 4 ) x 32 = 64 x 32`. The main difference from the 1D register tiled kernel is the shape of `bTile`. In the 1D register tiled kernel, the block computed only `BLOCK_X` output columns, so `bTile` only needed `BLOCK_X` columns. In the 2D register tiled kernel, every thread now computes `COLS_PER_THREAD = 4` output columns. Since there are `BLOCK_X = 16` thread columns in the block, the block as a whole computes `TILE_N = BLOCK_X * COLS_PER_THREAD = 16 * 4 = 64` output columns. Therefore, the block requires 64 columns from `b` during each `k`-tile iteration, giving the dimensions of `bTile` to be `TILE_K x TILE_N = 32 x 64`. So each thread block now computes a `64 x 64` tile of the output matrix.
+The shape of `aTile` is still determined by the number of output rows computed by the block and the number of elements processed along the `k` dimension during each tile iteration. Therefore `aTile` has dimensions `(BLOCK_Y * ROWS_PER_THREAD) x TILE_K = (16 * 4 ) x 32 = 64 x 32`. The main difference from the 1D register tiled kernel is the shape of `bTile`. In the 1D register tiled kernel, the block computed only `BLOCK_X` output columns, so `bTile` only needed `BLOCK_X` columns. In the 2D register tiled kernel, every thread now computes `COLS_PER_THREAD = 4` output columns. Since there are `BLOCK_X = 16` thread columns in the block, the block as a whole computes `TILE_N = BLOCK_X * COLS_PER_THREAD = 16 * 4 = 64` output columns. Therefore, the block requires 64 columns from `b` during each `k`-tile iteration, so `bTile` has dimensions `TILE_K x TILE_N = 32 x 64`. So each thread block now computes a `64 x 64` tile of the output matrix.
 
 Next, we get the thread's 2D coordinates within the block and also calculate a flattened thread index `tid`:
 
@@ -1269,6 +1271,8 @@ At first, this may seem quite similar to coalescing, since the entire point of c
 
 However, each thread still reads only one float per memory instruction. Vectorization allows each thread to read or write four contiguous floats with a single instruction. This is better explained with an example.
 
+In the examples below, assume `// calculations done...` uses all loaded values to produce an output. Otherwise, the compiler can remove unused loads.
+
 Assume we have a single warp, which, remember, contains 32 threads. Suppose that warp needs to read 128 contiguous floats from the float array `a`. Since a `float` is 4 bytes, the warp is responsible for reading:
 
 ```text
@@ -1535,7 +1539,7 @@ Finally:
 constexpr uint32_t BYTES_PER_FLOAT4 = 16;
 ```
 
-is simply because each float is four bytes, and a `float4` contains four floats. Thus `4 floats * 4 bytes = 16 bytes`.
+`BYTES_PER_FLOAT4` is 16 because each float is four bytes, and a `float4` contains four floats. Thus `4 floats * 4 bytes = 16 bytes`.
 
 The next new piece is `__align__(BYTES_PER_FLOAT4)` which means 16 byte alignment. For example:
 
@@ -1543,7 +1547,7 @@ The next new piece is `__align__(BYTES_PER_FLOAT4)` which means 16 byte alignmen
 __shared__ __align__(BYTES_PER_FLOAT4) float bTile[TILE_K][TILE_N];
 ```
 
-ensures that the address to the first float in `bTile` is aligned to 16 bytes. That means the address is 0 or divisible by 16.
+This declaration ensures that the address of the first float in `bTile` is aligned to 16 bytes. That means the address is divisible by 16.
 
 We want this because a `float4` access moves 16 bytes at once. The address used for a `float4` load or store therefore needs to be 16 byte aligned if we want to safely use that 16 byte access. In this kernel, the indices used for the `float4` accesses are also chosen in groups of four floats, so the addresses we use remain aligned to 16 byte boundaries.
 
@@ -1626,7 +1630,7 @@ At first, it may seem like directly writing the entire `float4` into shared memo
 *reinterpret_cast<float4*>(&aTile[aTileY][aTileX]) = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
 ```
 
-This should indeed be faster. So why do we transpose `aTile` instead? The reason becomes clear when we look at how `aTile` is read during the partial dot product calculation:
+This uses fewer shared memory store instructions. So why do we transpose `aTile` instead? The reason becomes clear when we look at how `aTile` is read during the partial dot product calculation:
 
 ```cuda
 #pragma unroll
@@ -1697,7 +1701,7 @@ uint32_t idx = tid * 32;
 uint32_t element = aShared[idx];
 ```
 
-where `tid` represents the threads ID. CUDA executes instructions at the warp level, so for this example consider the first warp, where `tid = 0, 1, ..., 31`.
+where `tid` represents the thread's ID. CUDA executes instructions at the warp level, so for this example consider the first warp, where `tid = 0, 1, ..., 31`. As with the earlier examples, assume the loaded values are used by the kernel so these loads are not optimized away.
 
 ```text
 thread 0:  idx = 0 * 32  =   0. Accesses bank   0 mod 32 = 0
@@ -1708,7 +1712,7 @@ thread 31: idx = 31 * 32 = 992. Accesses bank 992 mod 32 = 0
 
 As we can see, each thread in the warp accesses a different index, but all of those indices map to the same bank. Since the bank cannot serve all 32 different addresses simultaneously, these accesses must be serialized, meaning they are served one at a time rather than in parallel. Instead of servicing the warp's accesses in one conflict-free step, the hardware must perform 32 successive accesses to bank 0.
 
-This is a bank conflict: threads in the same warp access different memory addresses that map to the same bank. If multiple threads in a warp access the same memory address in the same bank, that is okay because the value can be retrieved once and provided to all of those threads.
+This is a bank conflict: threads in the same warp access different memory addresses that map to the same bank. If multiple threads in a warp read the same memory address, the value can be retrieved once and broadcast to all of those threads. Same-address writes behave differently. Only one thread's write succeeds, and which thread wins is undefined.
 
 In the previous example, we looked at what happens when each thread in a warp accesses one `float`. Since there are 32 threads in a warp and each thread accesses one 4 byte `float`, the warp requests:
 
@@ -2236,7 +2240,7 @@ y_1 - y_2 &= 128k \quad \text{where } k = q_1 - q_2.
 \end{aligned}
 ```
 
-Since $`L= \{0,1,\dots,31\} \times \{0,1,\dots,127\}`$, therefore $`y_1,y_2\in\{0,1,\dots,127\}`$. Thus, $`(y_1 - y_2) \in \{-127, -126, \dots, -1, 0, 1, \dots 127\}`$. Therefore, it must be that $`k = 0`$, meaning
+Since $`L= \{0,1,\dots,31\} \times \{0,1,\dots,127\}`$, $`y_1,y_2\in\{0,1,\dots,127\}`$. Thus, $`(y_1 - y_2) \in \{-127, -126, \dots, -1, 0, 1, \dots 127\}`$. Therefore, it must be that $`k = 0`$, meaning
 
 ```math
 y_1 - y_2 = 128k \Leftrightarrow y_1 = y_2.
@@ -2248,7 +2252,7 @@ Now, we must prove that $`F`$ is onto.
 
 Since $`F`$ is one-to-one, by definition $`F`$ maps distinct elements of $`L`$ to distinct elements in $`F(L)`$. Therefore $`|F(L)| = |L|`$.
 
-Since $`|L| = |P|`$, therefore $`|F(L)| = |P|`$.
+Since $`|L| = |P|`$, $`|F(L)| = |P|`$.
 
 By definition $`F(L) \subseteq P`$.
 
@@ -2376,7 +2380,7 @@ This works for the first 8 groups, but what about group indices larger than 7? S
 \left\lfloor \dfrac{x}{8} \right\rfloor \bmod 8 \geq 4
 ```
 
-Now, that we know how to determine if we need to swap an $`x`$ value, we need to figure out how to define an operation on $`x`$ to give us the desired swap. Consider $`x = 38`$, which from above we see is in `groupIdx = 4`, so we `swap` iteration 1 and iteration 2. Below is what we currently have:
+Now that we know how to determine if we need to swap an $`x`$ value, we need to figure out how to define an operation on $`x`$ to give us the desired swap. Consider $`x = 38`$, which from above we see is in `groupIdx = 4`, so we `swap` iteration 1 and iteration 2. Below is what we currently have:
 
 ```text
 idx within group:  0   1  2  3 |  4  5  6  7
@@ -2397,9 +2401,12 @@ before: index 6
 after:  index 2
 ```
 
-More generally, the swap we want is
+More generally, the swap we want is:
+
+```text
 original idx:  0 1 2 3 | 4 5 6 7
 swapped idx:   4 5 6 7 | 0 1 2 3
+```
 
 So we need an operation that maps
 
@@ -2799,7 +2806,7 @@ __global__ void matMulCudaResolveBankConflictsKernel (
         for (uint32_t tileRowOffset = 0; tileRowOffset < TILE_M; tileRowOffset += A_TILE_ROW_STRIDE) {
             const uint32_t aTileY = tileRowOffset + aTileYStart;
             const TileCoord aTileCoords = aTilePhysicalCoord(aTileX, aTileY);
-            const uint32_t ay = ayBlockStart + aTileY;;
+            const uint32_t ay = ayBlockStart + aTileY;
             const uint32_t ax = tileStart + aTileX;
 
             const float4 toLoad = *reinterpret_cast<const float4*>(&a[ay * k + ax]);
@@ -3029,7 +3036,7 @@ B access pattern:
 
 Therefore, changing the warp tile does not change the amount of work performed by the warp or the number of outputs computed by each thread. Instead, it changes how the shared memory accesses of the 32 threads are grouped together during the accumulation phase. This can change shared memory broadcasts, bank conflicts, and the overall cost of supplying operands to the warp.
 
-A shared memory broadcast occurs when multiple threads in a warp access the same shared memory address. The value only needs to be read from shared memory once and can then be broadcast to all threads in the warp that requested it.
+A shared memory broadcast occurs when multiple threads in a warp read the same shared memory address. The value only needs to be read from shared memory once and can then be broadcast to all threads in the warp that requested it.
 
 There is not necessarily one warp shape that is always better. Instead, making the warp tile explicit gives us another parameter that we can experiment with and tune for the GPU.
 
@@ -3349,7 +3356,7 @@ warpThreadY: +----+----+
 
 The final indexing step is to calculate `threadTileStartYInBlock` and `threadTileStartXInBlock`. These are the starting coordinates of the thread's `8 x 8` output tile relative to the block's `128 x 128` output tile.
 
-For the $`y`$ coordinate, we first calculate the $`y`$ coordinate, relative to the block output tile, at which the warp's first thread tile begins.
+First, we calculate the warp tile's starting row within the block.
 
 ```text
 warpStartY = warpY * WARP_TILE_M
@@ -3411,9 +3418,9 @@ Despite these additional conflicts, the kernel was still faster overall. This is
 
 This is an important result: minimizing bank conflicts does not necessarily minimize the total execution time of the kernel. Warp shape introduces several interacting tradeoffs, so the fastest configuration cannot always be determined by optimizing a single metric in isolation.
 
-Since the warp tile shape is now an explicit parameter, the next step is to autotune the kernel by testing different combinations of block tile, warp tile, thread tile, and `TILE_K` sizes to determine which configuration performs best on the GPU.
+Since the warp tile shape is now an explicit parameter, we can later autotune the kernel by testing different combinations of block tile, warp tile, thread tile, and `TILE_K` sizes to determine which configuration performs best on the GPU.
 
-The next step is to extend this tiling hierarchy one level further by subdividing easch warp tile into smaller warp subtiles.
+The next step is to extend this tiling hierarchy one level further by subdividing each warp tile into smaller warp subtiles.
 
 ## Optimization 8: Warp Subtiling
 
@@ -3833,14 +3840,14 @@ constexpr uint32_t WARP_SUBTILES_PER_WARP_TILE_N = 2;
 
 these specify the number of subtiles within each warp tile along the $`M`$ ($`y`$) and $`N`$ ($`x`$) dimensions, respectively. These are the same `2 x 2` subdivisions shown in the previous set of diagrams.
 
-Next,
+Next, these constants define the size of each warp subtile:
 
 ```cuda
 constexpr uint32_t WARP_SUBTILE_M = WARP_TILE_M / WARP_SUBTILES_PER_WARP_TILE_M;
 constexpr uint32_t WARP_SUBTILE_N = WARP_TILE_N / WARP_SUBTILES_PER_WARP_TILE_N;
 ```
 
-define the size of each warp subtile. For our `128 x 16` warp tile,
+For our `128 x 16` warp tile,
 
 ```math
 \text{WARP\_SUBTILE\_M} =
@@ -3860,14 +3867,12 @@ and
 
 Therefore, each warp subtile computes a `64 x 8` region of the output.
 
-Finally,
+Finally, these constants describe the horizontal layout at two different levels of the tiling hierarchy:
 
 ```cuda
 constexpr uint32_t WARP_TILES_PER_BLOCK_N = TILE_N / WARP_TILE_N;
 constexpr uint32_t THREAD_TILES_PER_WARP_SUBTILE_N = WARP_SUBTILE_N / COLS_PER_THREAD_TILE;
 ```
-
-describe the horizontal layout at two different levels of the tiling hierarchy.
 
 The number of warp tile columns within the block output tile is
 
@@ -3926,7 +3931,7 @@ for (uint32_t subtileY = 0; subtileY < WARP_SUBTILES_PER_WARP_TILE_M; subtileY++
 }
 ```
 
-Recall that `threadTileStartYInBlock` is the starting $`y`$ coordinate of the thread tile relative to the entire block output tile. In the warp subtiled kernel, this gives the thread's local position within the first warp subtile row.
+Recall that `threadTileStartYInBlock` is the starting $`y`$ coordinate of the thread tile relative to the entire block output tile. In the warp subtiled kernel, it identifies the thread tile's starting row in the first warp subtile, measured from the block's origin.
 
 To access the corresponding thread tile in each warp subtile row, we add
 
@@ -4012,7 +4017,9 @@ At this point, we have introduced several parameters that control how work is di
 
 ## Optimization 9: Autotuning
 
-This section is conceptually much simpler than the others. We don't need to introduce any new GPU architecture concepts here. Autotuning refers to systematically testing different kernel configurations to determine which combination gives the best performance on a particular GPU. By configuration, we mean changing the values of constants that control how work is divided within the kernel, such as `TILE_M`, `TILE_N`, `TILE_K`, `WARP_TILE_M`, `WARP_TILE_N`, `ROWS_PER_THREAD`, `COLS_PER_THREAD`, `WARP_SUBTILES_PER_WARP_TILE_M`, `WARP_SUBTILES_PER_WARP_TILE_N`, and other controllable constants.
+This section is conceptually much simpler than the others. We don't need to introduce any new GPU architecture concepts here. Autotuning refers to systematically testing different kernel configurations to determine which combination gives the best performance on a particular GPU. By configuration, we mean changing the values of constants that control how work is divided within the kernel, such as `TILE_M`, `TILE_N`, `TILE_K`, `WARP_TILE_M`, `WARP_TILE_N`, `ROWS_PER_THREAD_TILE`, `COLS_PER_THREAD_TILE`, `WARP_SUBTILES_PER_WARP_TILE_M`, `WARP_SUBTILES_PER_WARP_TILE_N`, and other controllable constants.
+
+Some dimensions, such as `TILE_M`, `TILE_N`, `WARP_TILE_M`, and `WARP_TILE_N`, are derived from the parameters swept directly rather than searched independently.
 
 An autotuner is a program that automates this process. It generates kernels using different combinations of these parameter values, compiles and benchmarks each valid configuration, and records which configuration produces the best performance.
 
@@ -4037,7 +4044,7 @@ THREAD_TILES_PER_WARP_SUBTILE_N = (1, 2, 4, 8, 16, 32)
 
 Taken as a Cartesian product, these values represent `1,306,368` possible parameter combinations before any validity constraints are applied. However, most of these combinations cannot produce a valid kernel, so the autotuner filters the search space before attempting to compile anything.
 
-A configuration is only kept if it satisfies several constraints. The thread block must contain at most 1024 threads and its thread count must be a multiple of 32. The block, warp tile, warp subtile, and thread tile dimensions must divide evenly into one another, and each warp subtile must contain exactly 32 thread tiles so that every thread in the warp has work to perform. The configuration must also support the `float4` loading strategy used by the kernel, fit within the 48 KB static shared memory limit, use no more than 128 accumulators per thread to limit register pressure, and evenly divide the matrix dimensions since the autotuner benchmarks exact fit kernels.
+A configuration is only kept if it satisfies several constraints. The thread block must contain at most 1024 threads and its thread count must be a multiple of 32. The block, warp tile, warp subtile, and thread tile dimensions must divide evenly into one another, and each warp subtile must contain exactly 32 thread tiles so that every thread in the warp has work to perform. The configuration must also support the `float4` loading strategy used by the kernel, fit within the 48 KiB static shared memory limit, use no more than 128 accumulators per thread to limit register pressure, and evenly divide the matrix dimensions since the autotuner benchmarks exact fit kernels.
 
 In addition, the layout must admit a conflict free shared memory mapping for both `aTile` and `bTile`. For each candidate layout, the autotuner searches for a valid logical-to-physical shared memory mapping that preserves the required access patterns while eliminating bank conflicts during the relevant shared memory reads and writes. If no such mapping can be found, that configuration is discarded.
 
